@@ -8,7 +8,7 @@ const pluginSource = readFileSync(new URL('../plugin.js', import.meta.url), 'utf
 /** Load the plugin in a vm with a scripted cli.exec so member turns are
  *  deterministic. `turnScript(profile, prompt)` returns the member's reply
  *  text (or throws to simulate a failed turn). */
-function load(turnScript) {
+function load(turnScript, options = {}) {
   const values = new Map()
   const atom = initial => {
     const slot = { get: () => values.get(slot), set: value => values.set(slot, value) }
@@ -17,12 +17,19 @@ function load(turnScript) {
   }
   const calls = []
   const transcripts = new Map()
+  const timers = []
+  const storageWrites = new Map(Object.entries(options.storage || {}))
   const context = {
     atom,
-    setTimeout: fn => {
-      fn()
-      return 0
-    },
+    setTimeout: options.queueTimers
+      ? fn => {
+          timers.push(fn)
+          return timers.length
+        }
+      : fn => {
+          fn()
+          return 0
+        },
     clearTimeout: () => undefined,
     PALETTE_AREA: 'palette',
     COMPOSER_AREAS: { middleware: 'middleware' },
@@ -62,15 +69,20 @@ function load(turnScript) {
     .replace(/^import .* from 'react\/jsx-runtime'\r?\n/m, '')
     .replace('export default {', 'globalThis.plugin = {')
     .concat(
-      '\nglobalThis.__gc = { sendToGroupChat, runGroupChatRounds, resolveGroupResponders, parseGroupChatMentions, rotateGroupSpeakers, isGroupPassText, formatGroupChatLine, buildGroupChatTurnPrompt, trimGroupChatLog, disbandGroupChat, $groupChats, $groupNeedsYou, $groupChatWorkspace, $botMeta, GROUP_CHAT_MAX_ROUNDS, GROUP_CHAT_MAX_MESSAGES, GROUP_TURN_TIMEOUT_MS };\n'
+      '\nglobalThis.__gc = { sendToGroupChat, runGroupChatRounds, resolveGroupResponders, parseGroupChatMentions, rotateGroupSpeakers, isGroupPassText, formatGroupChatLine, buildGroupChatTurnPrompt, trimGroupChatLog, disbandGroupChat, queuePendingGroupTurn, pollPendingGroupTurn, completedGroupTurn, $groupChats, $groupNeedsYou, $groupChatWorkspace, $botMeta, GROUP_CHAT_MAX_ROUNDS, GROUP_CHAT_MAX_MESSAGES, GROUP_TURN_TIMEOUT_MS };\n'
     )
   vm.runInNewContext(source, context, { filename: 'plugin.js' })
-  const storageWrites = new Map()
   context.plugin.register({
-    storage: { get: () => null, set: (key, value) => storageWrites.set(key, value) },
+    storage: { get: key => storageWrites.get(key), set: (key, value) => storageWrites.set(key, value) },
     register: () => undefined
   })
-  return { ...context.__gc, calls, storageWrites }
+  return {
+    ...context.__gc,
+    calls,
+    storageWrites,
+    timers,
+    setTranscript: (profile, messages) => transcripts.set(profile, messages)
+  }
 }
 
 const MEMBERS = [{ name: 'research', title: '' }, { name: 'builder', title: '' }, { name: 'ops', title: 'The Ops' }]
@@ -88,10 +100,92 @@ test('pass detection: (pass), pass, pass., empty are silence; real text is not',
   assert.equal(gc.isGroupPassText('I will pass this to ops'), false)
 })
 
-test('long-running group turns retain a 30-minute reply window', () => {
+test('foreground group turns release the room after three minutes', () => {
   const gc = load(() => '(pass)')
 
-  assert.equal(gc.GROUP_TURN_TIMEOUT_MS, 30 * 60 * 1000)
+  assert.equal(gc.GROUP_TURN_TIMEOUT_MS, 3 * 60 * 1000)
+})
+
+test('late result is posted exactly once and clears the durable pending turn', async () => {
+  const gc = load(() => '(pass)', { queueTimers: true })
+  gc.$groupChats.set({
+    Late: { log: [], watermarks: {}, sessions: {}, pendingTurns: {}, epoch: 0, running: false }
+  })
+  const pending = gc.queuePendingGroupTurn(
+    'Late',
+    { name: 'research', title: '' },
+    { runtime: 'rt-research', stored: 'sid-research' },
+    1
+  )
+  gc.setTranscript('research', [
+    { role: 'assistant', content: 'old answer' },
+    { role: 'user', content: 'large job' },
+    { role: 'assistant', content: 'finished after timeout' }
+  ])
+
+  await gc.pollPendingGroupTurn('Late', pending.id)
+  await gc.pollPendingGroupTurn('Late', pending.id)
+
+  const log = roomLog(gc, 'Late')
+  assert.equal(log.length, 1)
+  assert.equal(log[0].text, 'finished after timeout')
+  assert.equal(log[0].late, true)
+  assert.equal(Object.keys(gc.$groupChats.get().Late.pendingTurns).length, 0)
+  assert.equal(Object.keys(gc.storageWrites.get('group-chats').Late.pendingTurns).length, 0)
+})
+
+test('pending turn rehydrates after restart and schedules recovery', async () => {
+  const pending = {
+    id: 'research-restart',
+    memberKey: 'research',
+    member: { name: 'research', title: '' },
+    sessionId: 'sid-research',
+    before: 1,
+    submittedAt: Date.now(),
+    expiresAt: Date.now() + 60_000
+  }
+  const gc = load(() => '(pass)', {
+    queueTimers: true,
+    storage: {
+      'group-chats': {
+        Restart: {
+          log: [{ from: { kind: 'user', name: 'You' }, text: 'keep working', at: 1 }],
+          watermarks: { research: 1 },
+          sessions: { research: 'sid-research' },
+          pendingTurns: { [pending.id]: pending },
+          members: []
+        }
+      }
+    }
+  })
+
+  await new Promise(resolve => setImmediate(resolve))
+  assert.ok(gc.$groupChats.get().Restart.pendingTurns[pending.id])
+  assert.ok(gc.timers.length > 0, 'restart schedules a pending-turn check')
+
+  gc.setTranscript('research', [
+    { role: 'user', content: 'keep working' },
+    { role: 'assistant', content: 'returned after restart' }
+  ])
+  await gc.pollPendingGroupTurn('Restart', pending.id)
+  assert.equal(roomLog(gc, 'Restart').at(-1).text, 'returned after restart')
+})
+
+test('completed turn ignores assistant messages that predate the submitted prompt', () => {
+  const gc = load(() => '(pass)')
+  const state = {
+    inflight: false,
+    running: false,
+    messages: [
+      { role: 'assistant', content: 'old answer' },
+      { role: 'user', content: 'new work' },
+      { role: 'assistant', content: [{ text: 'new answer' }] }
+    ]
+  }
+
+  assert.equal(gc.completedGroupTurn(state, 1).text, 'new answer')
+  assert.equal(gc.completedGroupTurn({ ...state, inflight: true }, 1).done, false)
+  assert.equal(gc.completedGroupTurn({ inflight: false, running: false, messages: state.messages.slice(0, 2) }, 1).done, false)
 })
 
 test('mention routing: only @-mentioned members respond; @everyone or none = all', () => {

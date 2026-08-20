@@ -173,6 +173,9 @@ const $sessionsGatewayGeneration = atom(0)
 /** Group-chat rooms: { [group]: { log: [{from:{kind,name},text,at}], watermarks:{[member]:idx}, epoch, running } }.
  *  Log + watermarks persist via plugin storage; epoch/running are runtime-only. */
 const $groupChats = atom({})
+/** Runtime timers for durable turns that outlive the foreground room wait. */
+const groupPendingTimers = new Map()
+let groupPendingDisposed = false
 /** Group whose room view is open in the Bots pane (secondary navigation,
  *  same pattern as $botSessionsWorkspace). */
 const $groupChatWorkspace = atom(null)
@@ -191,6 +194,7 @@ function handleSessionsGatewayTransition() {
   }
 
   $groupChats.set(rooms)
+  resumePendingGroupTurns()
 }
 
 /** Per-bot appearance + display meta, persisted via ctx.storage:
@@ -3050,6 +3054,7 @@ function updateGroupChat(group, mutate) {
         log: room.log,
         watermarks: room.watermarks,
         sessions: room.sessions || {},
+        pendingTurns: room.pendingTurns || {},
         // Cross-connection member descriptors — remote bots can't ride
         // bot-meta, so the room record carries who they are.
         members: Array.isArray(room.members) ? room.members : []
@@ -3074,6 +3079,7 @@ async function disbandGroupChat(group, memberNames) {
   // Invalidate any in-flight round-robin FIRST: bump the epoch so a running
   // drive bails at its next member boundary instead of appending to a room
   // the user just discarded.
+  cancelPendingGroupTurns(group)
   const all = { ...$groupChats.get() }
   const prior = all[group] || {}
 
@@ -3102,7 +3108,13 @@ async function disbandGroupChat(group, memberNames) {
 
     for (const [name, room] of Object.entries($groupChats.get())) {
       if (name !== group && Array.isArray(room.log)) {
-        durable[name] = { log: room.log, watermarks: room.watermarks, sessions: room.sessions || {} }
+        durable[name] = {
+          log: room.log,
+          watermarks: room.watermarks,
+          sessions: room.sessions || {},
+          pendingTurns: room.pendingTurns || {},
+          members: Array.isArray(room.members) ? room.members : []
+        }
       }
     }
 
@@ -3119,8 +3131,8 @@ async function disbandGroupChat(group, memberNames) {
   }
 }
 
-function appendGroupChatEntry(group, from, text) {
-  const entry = { from, text: String(text).trim(), at: Date.now() }
+function appendGroupChatEntry(group, from, text, extra = {}) {
+  const entry = { from, text: String(text).trim(), at: Date.now(), ...extra }
 
   updateGroupChat(group, room => {
     room.log.push(entry)
@@ -3185,17 +3197,232 @@ async function ensureGroupChatSession(group, member) {
   return { runtime: created?.session_id || null, stored }
 }
 
-// Research-heavy local agents can legitimately take several minutes while
-// tools run. Keep polling their persistent session so the finished reply is
-// posted back into the room instead of being silently treated as a pass.
-const GROUP_TURN_TIMEOUT_MS = 30 * 60 * 1000
+const GROUP_TURN_TIMEOUT_MS = 3 * 60 * 1000
 const GROUP_TURN_POLL_MS = 2000
+const GROUP_LATE_POLL_MS = 10000
+const GROUP_LATE_TTL_MS = 24 * 60 * 60 * 1000
+
+function pendingGroupTurnKey(group, id) {
+  return `${group}\u0000${id}`
+}
+
+function durableGroupMember(member) {
+  const durable = {
+    name: String(member?.name || '').trim() || 'default',
+    title: String(member?.title || '').trim()
+  }
+
+  for (const key of ['handle', 'connectionId', 'connectionKind', 'connectionLabel']) {
+    if (member?.[key]) {
+      durable[key] = member[key]
+    }
+  }
+
+  if (member?.remoteSource) {
+    durable.remoteSource = true
+    durable.sourceScoped = true
+  }
+
+  return durable
+}
+
+function groupMessageText(message) {
+  if (typeof message?.content === 'string') {
+    return message.content.trim()
+  }
+
+  if (Array.isArray(message?.content)) {
+    return message.content
+      .map(part => (typeof part === 'string' ? part : part?.text || ''))
+      .join('')
+      .trim()
+  }
+
+  return String(message?.text || '').trim()
+}
+
+/** Return only an assistant message created after this turn was submitted. */
+function completedGroupTurn(state, before) {
+  if (state?.inflight || state?.running) {
+    return { done: false, text: null }
+  }
+
+  const messages = Array.isArray(state?.messages) ? state.messages : []
+  const fresh = messages.slice(Math.max(0, Number(before) || 0))
+
+  for (let i = fresh.length - 1; i >= 0; i--) {
+    if (fresh[i]?.role === 'assistant') {
+      return { done: true, text: groupMessageText(fresh[i]) }
+    }
+  }
+
+  // The gateway can briefly report idle between prompt submission and the
+  // persisted assistant message becoming visible. Keep waiting rather than
+  // turning that race into a false empty completion.
+  return { done: false, text: null }
+}
+
+function schedulePendingGroupTurn(group, id, delay = GROUP_LATE_POLL_MS) {
+  if (groupPendingDisposed) {
+    return
+  }
+
+  const key = pendingGroupTurnKey(group, id)
+
+  if (groupPendingTimers.has(key)) {
+    return
+  }
+
+  const timer = setTimeout(() => {
+    groupPendingTimers.delete(key)
+    void pollPendingGroupTurn(group, id)
+  }, delay)
+
+  groupPendingTimers.set(key, timer)
+}
+
+function cancelPendingGroupTurns(group = null) {
+  for (const [key, timer] of groupPendingTimers.entries()) {
+    if (group === null || key.startsWith(`${group}\u0000`)) {
+      clearTimeout(timer)
+      groupPendingTimers.delete(key)
+    }
+  }
+}
+
+function resumePendingGroupTurns() {
+  for (const [group, room] of Object.entries($groupChats.get())) {
+    for (const id of Object.keys(room?.pendingTurns || {})) {
+      schedulePendingGroupTurn(group, id, 0)
+    }
+  }
+}
+
+function queuePendingGroupTurn(group, member, session, before) {
+  const memberKey = groupMemberKey(member)
+  const now = Date.now()
+  const id = `${memberKey || 'member'}-${now}-${Math.random().toString(36).slice(2, 9)}`
+  const pending = {
+    id,
+    memberKey,
+    member: durableGroupMember(member),
+    sessionId: session.stored || session.runtime,
+    before,
+    submittedAt: now,
+    expiresAt: now + GROUP_LATE_TTL_MS
+  }
+
+  updateGroupChat(group, room => {
+    room.pendingTurns = { ...(room.pendingTurns || {}), [id]: pending }
+    return room
+  })
+  schedulePendingGroupTurn(group, id)
+  return pending
+}
+
+/** Atomically append a late result and remove its pending record. */
+function finishPendingGroupTurn(group, id, text, error = null) {
+  let appended = null
+
+  updateGroupChat(group, room => {
+    const pending = room.pendingTurns?.[id]
+
+    if (!pending) {
+      return room
+    }
+
+    room.pendingTurns = { ...room.pendingTurns }
+    delete room.pendingTurns[id]
+
+    if (room.log.some(entry => entry.lateTurnId === id)) {
+      return room
+    }
+
+    if (!error && isGroupPassText(text)) {
+      return room
+    }
+
+    appended = {
+      from: error
+        ? { kind: 'system', name: 'Hermes' }
+        : {
+            kind: 'member',
+            name: pending.member.name,
+            ...(pending.member.remoteSource
+              ? { source: pending.member.connectionLabel || pending.member.connectionId }
+              : {})
+          },
+      text: error || String(text).trim(),
+      at: Date.now(),
+      late: true,
+      lateTurnId: id
+    }
+    room.log.push(appended)
+    return room
+  })
+
+  if (appended?.from.kind === 'member' && /@user\b/i.test(appended.text)) {
+    $groupNeedsYou.set({ ...$groupNeedsYou.get(), [group]: true })
+  }
+
+  return appended
+}
+
+async function pollPendingGroupTurn(group, id) {
+  const room = $groupChats.get()[group]
+  const pending = room?.pendingTurns?.[id]
+
+  if (!pending) {
+    return
+  }
+
+  if (Date.now() >= pending.expiresAt) {
+    finishPendingGroupTurn(
+      group,
+      id,
+      null,
+      `@${pending.member.name}'s background turn did not finish within 24 hours.`
+    )
+    return
+  }
+
+  let state
+
+  try {
+    state = await requestForBot(pending.member, 'session.resume', {
+      session_id: pending.sessionId || `Group: ${group}`,
+      profile: pending.member.name
+    })
+  } catch {
+    schedulePendingGroupTurn(group, id)
+    return
+  }
+
+  const completed = completedGroupTurn(state, pending.before)
+
+  if (!completed.done) {
+    schedulePendingGroupTurn(group, id)
+    return
+  }
+
+  const entry = finishPendingGroupTurn(group, id, completed.text)
+
+  if (entry) {
+    host.notify?.({
+      kind: 'success',
+      title: `@${pending.member.name} finished`,
+      message: `The reply was posted in “${group}”.`
+    })
+  }
+}
 
 /** One member turn, gateway-native: submit the room delta as a prompt into
  *  the member's per-group session, then poll the session until a NEW
- *  assistant message lands (or timeout → pass). No shell composition. */
+ *  assistant message lands. At the foreground timeout, persist the turn and
+ *  let a background watcher deliver it later. No shell composition. */
 async function runGroupChatMemberTurn(group, member, prompt) {
-  const { runtime, stored } = await ensureGroupChatSession(group, member)
+  const session = await ensureGroupChatSession(group, member)
+  const { runtime, stored } = session
 
   if (!runtime) {
     return null
@@ -3232,29 +3459,14 @@ async function runGroupChatMemberTurn(group, member, prompt) {
       continue
     }
 
-    const messages = Array.isArray(state?.messages) ? state.messages : []
-    const done = !state?.inflight && !state?.running
+    const completed = completedGroupTurn(state, before)
 
-    if (messages.length > before && done) {
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i]
-
-        if (msg?.role === 'assistant') {
-          const text = typeof msg.content === 'string'
-            ? msg.content
-            : Array.isArray(msg.content)
-              ? msg.content.map(p => (typeof p === 'string' ? p : p?.text || '')).join('')
-              : msg?.text || ''
-
-          return String(text).trim()
-        }
-      }
-
-      return null
+    if (completed.done) {
+      return completed.text
     }
   }
 
-  return null // timeout — reads as a pass
+  return { pending: queuePendingGroupTurn(group, member, session, before) }
 }
 
 /** Drive one bounded round-robin room turn. Serial — one member at a time.
@@ -3280,6 +3492,12 @@ async function runGroupChatRounds(group, members) {
         const memberKey = groupMemberKey(member)
         const seen = room.watermarks[memberKey] || 0
         const delta = room.log.slice(seen)
+        const memberPending = Object.values(room.pendingTurns || {})
+          .some(turn => turn.memberKey === memberKey)
+
+        if (memberPending) {
+          continue
+        }
 
         if (!delta.length) {
           continue
@@ -3305,6 +3523,10 @@ async function runGroupChatRounds(group, members) {
           r.watermarks[memberKey] = r.log.length
           return r
         })
+
+        if (reply?.pending) {
+          continue
+        }
 
         if (reply !== null && !isGroupPassText(reply)) {
           appendGroupChatEntry(
@@ -6955,6 +7177,9 @@ function GroupChatWorkspace({ group, members }) {
   const room = rooms[group] || { log: [], running: false }
   const [draft, setDraft] = useState('')
   const [confirmDisband, setConfirmDisband] = useState(false)
+  const pendingNames = [...new Set(Object.values(room.pendingTurns || {})
+    .map(turn => turn?.member?.name)
+    .filter(Boolean))]
 
   const header = jsxs('div', {
     className: 'flex items-center gap-2 px-2.5 pt-2.5 pb-2',
@@ -7060,6 +7285,12 @@ function GroupChatWorkspace({ group, members }) {
                   className: 'px-2 py-1 text-[0.7rem] italic text-(--ui-text-quaternary)',
                   children: 'The room is working…'
                 }, 'working')
+              : null,
+            pendingNames.length
+              ? jsx('div', {
+                  className: 'px-2 py-1 text-[0.7rem] italic text-(--ui-text-quaternary)',
+                  children: `${pendingNames.map(name => `@${name}`).join(', ')} still working — the result will return here.`
+                }, 'pending')
               : null
           ]
         })
@@ -7521,10 +7752,15 @@ export default {
   register(ctx) {
     pluginCtx = ctx
     startFaceClock()
+    groupPendingDisposed = false
     // Disabling the plugin (or a hot reload) must actually stop the clock —
     // before this, the rAF loop + 1Hz document scan ran until app restart.
     if (typeof ctx.onDispose === 'function') {
       ctx.onDispose(stopFaceClock)
+      ctx.onDispose(() => {
+        groupPendingDisposed = true
+        cancelPendingGroupTurns()
+      })
     }
 
     // @-mention autocomplete: typing "@rese…" in ANY composer offers the
@@ -7648,6 +7884,9 @@ export default {
                   log: room.log,
                   watermarks: room.watermarks && typeof room.watermarks === 'object' ? room.watermarks : {},
                   sessions: room.sessions && typeof room.sessions === 'object' ? room.sessions : {},
+                  pendingTurns: room.pendingTurns && typeof room.pendingTurns === 'object'
+                    ? room.pendingTurns
+                    : {},
                   members: Array.isArray(room.members) ? room.members : [],
                   epoch: 0,
                   running: false
@@ -7656,6 +7895,7 @@ export default {
             }
 
             $groupChats.set({ ...rooms, ...$groupChats.get() })
+            resumePendingGroupTurns()
           }
         })
         .catch(() => undefined)
