@@ -1,0 +1,73 @@
+name: Sync upstream with Rory late-return fix
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-with-rory-fix
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out maintained fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure runtimes
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Rebuild fork main from upstream and tested patch
+        shell: bash
+        env:
+          PATCH_BRANCH: codex/group-chat-late-return-durable
+          PATCH_COMMIT: 00989c7caa34f5089f1fd637a85dae17c969f94e
+        run: |
+          set -euo pipefail
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --no-tags upstream main
+          git fetch --no-tags origin \
+            "+refs/heads/$PATCH_BRANCH:refs/remotes/origin/$PATCH_BRANCH" \
+            "+refs/heads/main:refs/remotes/origin/main"
+
+          old_main="$(git rev-parse origin/main)"
+          workflow_copy="$(mktemp)"
+          cp .github/workflows/sync-upstream-with-rory-fix.yml "$workflow_copy"
+
+          git switch --detach upstream/main
+
+          patch_state="$(git cherry upstream/main "origin/$PATCH_BRANCH" | awk -v sha="$PATCH_COMMIT" '$2 == sha { print $1 }')"
+          if [[ "$patch_state" == '+' ]]; then
+            git cherry-pick "$PATCH_COMMIT"
+          elif [[ -n "$patch_state" && "$patch_state" != '-' ]]; then
+            echo "Unexpected patch state: $patch_state" >&2
+            exit 1
+          fi
+
+          mkdir -p .github/workflows
+          cp "$workflow_copy" .github/workflows/sync-upstream-with-rory-fix.yml
+          git add .github/workflows/sync-upstream-with-rory-fix.yml
+          if ! git diff --cached --quiet; then
+            git commit -m 'ci: preserve Rory late-return fix across updates'
+          fi
+
+          node --test apps/desktop/src/plugins/hermes-bots/tests/group-chat.test.mjs
+          uv run --python 3.12 --with pytest python -m pytest -q tests/tools/test_terminal_none_command_guard.py
+
+          git push --force-with-lease="refs/heads/main:$old_main" origin HEAD:main
