@@ -62,7 +62,7 @@ function load(turnScript) {
     .replace(/^import .* from 'react\/jsx-runtime'\r?\n/m, '')
     .replace('export default {', 'globalThis.plugin = {')
     .concat(
-      '\nglobalThis.__gc = { sendToGroupChat, runGroupChatRounds, resolveGroupResponders, parseGroupChatMentions, rotateGroupSpeakers, isGroupPassText, formatGroupChatLine, buildGroupChatTurnPrompt, trimGroupChatLog, disbandGroupChat, $groupChats, $groupNeedsYou, $groupChatWorkspace, $botMeta, GROUP_CHAT_MAX_ROUNDS, GROUP_CHAT_MAX_MESSAGES };\n'
+      '\nglobalThis.__gc = { sendToGroupChat, runGroupChatRounds, resolveGroupResponders, parseGroupChatMentions, rotateGroupSpeakers, isGroupPassText, formatGroupChatLine, buildGroupChatTurnPrompt, trimGroupChatLog, disbandGroupChat, $groupChats, $groupNeedsYou, $groupChatWorkspace, $botMeta, GROUP_CHAT_MAX_ROUNDS, GROUP_CHAT_MAX_MESSAGES, GROUP_TURN_TIMEOUT_MS };\n'
     )
   vm.runInNewContext(source, context, { filename: 'plugin.js' })
   const storageWrites = new Map()
@@ -86,6 +86,12 @@ test('pass detection: (pass), pass, pass., empty are silence; real text is not',
   assert.equal(gc.isGroupPassText('Pass.'), true)
   assert.equal(gc.isGroupPassText('  '), true)
   assert.equal(gc.isGroupPassText('I will pass this to ops'), false)
+})
+
+test('long-running group turns retain a 30-minute reply window', () => {
+  const gc = load(() => '(pass)')
+
+  assert.equal(gc.GROUP_TURN_TIMEOUT_MS, 30 * 60 * 1000)
 })
 
 test('mention routing: only @-mentioned members respond; @everyone or none = all', () => {

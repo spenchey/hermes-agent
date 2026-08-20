@@ -3185,7 +3185,10 @@ async function ensureGroupChatSession(group, member) {
   return { runtime: created?.session_id || null, stored }
 }
 
-const GROUP_TURN_TIMEOUT_MS = 180000
+// Research-heavy local agents can legitimately take several minutes while
+// tools run. Keep polling their persistent session so the finished reply is
+// posted back into the room instead of being silently treated as a pass.
+const GROUP_TURN_TIMEOUT_MS = 30 * 60 * 1000
 const GROUP_TURN_POLL_MS = 2000
 
 /** One member turn, gateway-native: submit the room delta as a prompt into
