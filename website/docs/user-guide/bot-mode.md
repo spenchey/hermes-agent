@@ -98,8 +98,13 @@ Groups are standalone rows in the same activity-ordered roster as Bot DMs. A Bot
 - Bots pull each other in with `@name`, and escalate real judgment calls to you with `@user` — the group row shows a **needs you** badge when that happens.
 - Hard caps (10 messages per send, 3 rounds) keep rooms from spinning.
 - Each member keeps its own persistent `Group: <name>` session, so room context survives like any other conversation.
+- A member turn owns the room for at most **three minutes**. Work that is still running continues in the member session; Desktop checks it once per minute for up to 24 hours and posts the completed reply back into the same room and thread. Persisted pending markers let another Desktop resume that check after reconnecting or reopening the room.
 - **Not every Bot replies to every message.** Speaking is each member's own choice — a Bot replies only when it has something new to add and passes otherwise, and @-mentioning specific members scopes the round to them. Expect the members you addressed (or whoever has something to say) to speak, and the rest to stay quiet.
 - **Rooms can span machines.** The New Group Chat picker seats Bots from any registered connection; each member's turns run on its own machine, in its own `Group: <name>` session there. Cross-machine members carry a device badge (`dixie · Mac Mini`) in the room and in other members' transcripts, and the disambiguated `@name-device` handle works in room mentions — so same-named agents on two machines never blur together.
+
+:::note Late delivery is a Desktop group-room feature
+The three-minute handoff and minute-level late-result harvester apply only to **Bot Mode group rooms in Hermes Desktop**. A Bot's direct chat uses the normal session path, and Slack uses the gateway's Slack adapter; neither inherits this room timer. Room metadata and a bounded recent transcript synchronize through connected gateways, while each Desktop keeps its own full local room log and runs its own in-process harvester. The persisted marker prevents a restart or another connected Desktop from losing the pending result.
+:::
 
 ## Bot-to-bot messaging
 
