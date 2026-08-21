@@ -69,7 +69,7 @@ function load(turnScript, options = {}) {
     .replace(/^import .* from 'react\/jsx-runtime'\r?\n/m, '')
     .replace('export default {', 'globalThis.plugin = {')
     .concat(
-      '\nglobalThis.__gc = { sendToGroupChat, runGroupChatRounds, resolveGroupResponders, parseGroupChatMentions, rotateGroupSpeakers, isGroupPassText, formatGroupChatLine, buildGroupChatTurnPrompt, trimGroupChatLog, disbandGroupChat, queuePendingGroupTurn, pollPendingGroupTurn, completedGroupTurn, $groupChats, $groupNeedsYou, $groupChatWorkspace, $botMeta, GROUP_CHAT_MAX_ROUNDS, GROUP_CHAT_MAX_MESSAGES, GROUP_TURN_TIMEOUT_MS };\n'
+      '\nglobalThis.__gc = { sendToGroupChat, runGroupChatRounds, resolveGroupResponders, parseGroupChatMentions, rotateGroupSpeakers, isGroupPassText, formatGroupChatLine, buildGroupChatTurnPrompt, trimGroupChatLog, disbandGroupChat, queuePendingGroupTurn, pollPendingGroupTurn, completedGroupTurn, $groupChats, $groupNeedsYou, $groupChatWorkspace, $botMeta, GROUP_CHAT_MAX_ROUNDS, GROUP_CHAT_MAX_MESSAGES, GROUP_TURN_TIMEOUT_MS, GROUP_LATE_POLL_MS };\n'
     )
   vm.runInNewContext(source, context, { filename: 'plugin.js' })
   context.plugin.register({
@@ -104,6 +104,7 @@ test('foreground group turns release the room after three minutes', () => {
   const gc = load(() => '(pass)')
 
   assert.equal(gc.GROUP_TURN_TIMEOUT_MS, 3 * 60 * 1000)
+  assert.equal(gc.GROUP_LATE_POLL_MS, 60 * 1000)
 })
 
 test('late result is posted exactly once and clears the durable pending turn', async () => {

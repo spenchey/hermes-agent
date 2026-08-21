@@ -3199,7 +3199,9 @@ async function ensureGroupChatSession(group, member) {
 
 const GROUP_TURN_TIMEOUT_MS = 3 * 60 * 1000
 const GROUP_TURN_POLL_MS = 2000
-const GROUP_LATE_POLL_MS = 10000
+// Once a turn has already exceeded the foreground window, minute-level
+// delivery is responsive enough without repeatedly waking the gateway.
+const GROUP_LATE_POLL_MS = 60 * 1000
 const GROUP_LATE_TTL_MS = 24 * 60 * 60 * 1000
 
 function pendingGroupTurnKey(group, id) {
