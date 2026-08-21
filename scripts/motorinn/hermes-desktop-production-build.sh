@@ -75,7 +75,12 @@ payload = {
     "contract": {
         "surface": "desktop-bot-mode-group-rooms",
         "foregroundTimeoutSeconds": 180,
-        "latePollSeconds": 60,
+        "latePollLadder": [
+            {"untilAgeSeconds": 3600, "intervalSeconds": 300},
+            {"untilAgeSeconds": 14400, "intervalSeconds": 900},
+            {"untilAgeSeconds": 43200, "intervalSeconds": 1800},
+            {"untilAgeSeconds": 86400, "intervalSeconds": 3600},
+        ],
         "lateTtlSeconds": 86400,
     },
 }
@@ -124,7 +129,12 @@ payload = {
     "contract": {
         "surface": "desktop-bot-mode-group-rooms",
         "foregroundTimeoutSeconds": 180,
-        "latePollSeconds": 60,
+        "latePollLadder": [
+            {"untilAgeSeconds": 3600, "intervalSeconds": 300},
+            {"untilAgeSeconds": 14400, "intervalSeconds": 900},
+            {"untilAgeSeconds": 43200, "intervalSeconds": 1800},
+            {"untilAgeSeconds": 86400, "intervalSeconds": 3600},
+        ],
         "lateTtlSeconds": 86400,
     },
 }
