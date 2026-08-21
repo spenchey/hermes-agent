@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-SOURCE_HOST="${HERMES_PRODUCTION_SOURCE_HOST:-codex-mac-studio}"
+SOURCE_HOST="${HERMES_PRODUCTION_SOURCE_HOST:-spencerheywood@100.98.90.106}"
 SOURCE_ROOT="${HERMES_PRODUCTION_ARTIFACT_ROOT:-/Users/spencerheywood/.hermes/production-artifacts/desktop}"
 TARGET_APP="/Applications/Hermes.app"
 INSTALL_SELF="$HOME/.local/bin/hermes-desktop-production-ensure"
