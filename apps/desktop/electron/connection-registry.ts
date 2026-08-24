@@ -659,7 +659,7 @@ export function parseRemoteProfileListing(text: string): string[] {
  */
 export function buildAgentRoster(
   enumerations: ConnectionAgents[],
-  opts: { primaryConnectionId?: string } = {}
+  opts: { primaryConnectionId?: string; suppressLocalMirrorsOfPrimary?: boolean } = {}
 ): RosterAgent[] {
   // A connection can transiently report the same profile more than once (or
   // arrive twice while registry state is reconciling). A roster row represents
@@ -695,6 +695,28 @@ export function buildAgentRoster(
     }
 
     order += 1
+  }
+
+  // A remote-primary desktop may also have a local backend pooled from an old
+  // click/session. Synced profile directories then make that separate runtime
+  // advertise the same names as the primary, producing dead `*-this-device`
+  // shadows. Hide only exact-name local mirrors; local-only profiles remain.
+  if (
+    opts.suppressLocalMirrorsOfPrimary &&
+    opts.primaryConnectionId &&
+    opts.primaryConnectionId !== LOCAL_CONNECTION_ID
+  ) {
+    const primaryProfiles = new Set(
+      [...identities.values()]
+        .filter(identity => identity.connection.id === opts.primaryConnectionId)
+        .map(identity => identity.profile)
+    )
+
+    for (const [key, identity] of identities) {
+      if (identity.connection.kind === 'local' && primaryProfiles.has(identity.profile)) {
+        identities.delete(key)
+      }
+    }
   }
 
   // Backend-identity collapse: two connections reporting the same install_id

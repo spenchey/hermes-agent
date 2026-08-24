@@ -15277,7 +15277,11 @@ ipcMain.handle('hermes:plugin-profile-routes', async (_event, rawProfileNames) =
 
   const registry = readDesktopConnectionsRegistry()
   const enumerations = await enumerateRegistryAgentSources(registry)
-  let agents = buildAgentRoster(enumerations, { primaryConnectionId: registry.primary })
+
+  let agents = buildAgentRoster(enumerations, {
+    primaryConnectionId: registry.primary,
+    suppressLocalMirrorsOfPrimary: true
+  })
 
   // Roster enumeration deliberately does not dial connect-on-demand SSH
   // sources. Publish one credential-free seed route so a plugin can be the
@@ -15782,7 +15786,10 @@ ipcMain.handle('hermes:agents:roster', async () => {
   const enumerations = await enumerateRegistryAgentSources(registry)
 
   return {
-    agents: buildAgentRoster(enumerations, { primaryConnectionId: registry.primary }),
+    agents: buildAgentRoster(enumerations, {
+      primaryConnectionId: registry.primary,
+      suppressLocalMirrorsOfPrimary: true
+    }),
     // The active gateway owns the renderer's profiles.list — union agents
     // that report THIS connection are the same identities, not extra rows.
     // Expose the primary id so the plugin merger can annotate them in place

@@ -986,6 +986,43 @@ test('roster: different install_ids stay separate rows with disambiguated handle
   assert.deepEqual(roster.map(a => a.handle).sort(), ['default-mini', 'default-spark'])
 })
 
+test('roster: remote-primary desktop suppresses same-named local mirrors but keeps local-only agents', () => {
+  const local = { id: 'local', kind: 'local' as const, label: 'This device' }
+  const studio = { id: 'studio', kind: 'remote' as const, label: 'Mac Studio', url: 'http://studio:9119' }
+
+  const roster = buildAgentRoster(
+    [
+      { connection: local, profiles: ['default', 'emily', 'local-only'], installId: 'work-mac' },
+      { connection: studio, profiles: ['default', 'emily', 'rory'], installId: 'studio' }
+    ],
+    { primaryConnectionId: 'studio', suppressLocalMirrorsOfPrimary: true }
+  )
+
+  assert.deepEqual(roster.map(agent => `${agent.connectionId}/${agent.profile}`).sort(), [
+    'local/local-only',
+    'studio/default',
+    'studio/emily',
+    'studio/rory'
+  ])
+  assert.equal(roster.find(agent => agent.profile === 'emily')?.handle, 'emily')
+})
+
+test('roster: local-primary desktop does not suppress its local agents', () => {
+  const local = { id: 'local', kind: 'local' as const, label: 'This device' }
+  const studio = { id: 'studio', kind: 'remote' as const, label: 'Mac Studio', url: 'http://studio:9119' }
+
+  const roster = buildAgentRoster(
+    [
+      { connection: local, profiles: ['emily'], installId: 'work-mac' },
+      { connection: studio, profiles: ['emily'], installId: 'studio' }
+    ],
+    { primaryConnectionId: 'local', suppressLocalMirrorsOfPrimary: true }
+  )
+
+  assert.equal(roster.length, 2)
+  assert.deepEqual(roster.map(agent => agent.handle).sort(), ['emily-mac-studio', 'emily-this-device'])
+})
+
 test('roster: collapse also folds a third same-box connection from a per-profile v1 override import', () => {
   // The reporter's "profile with cron appears as another duplicate": the v1
   // migration imports per-profile override blocks as EXTRA connections, so a
