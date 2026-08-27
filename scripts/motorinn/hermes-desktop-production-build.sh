@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
-BRANCH="codex/hermes-desktop-production"
+BRANCH="${HERMES_PRODUCTION_BRANCH:-codex/hermes-desktop-production}"
 ARTIFACT_ROOT="${HERMES_PRODUCTION_ARTIFACT_ROOT:-$HOME/.hermes/production-artifacts/desktop}"
 SYNC_UPSTREAM=1
 DEPLOY=1
