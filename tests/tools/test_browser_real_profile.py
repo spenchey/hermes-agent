@@ -214,6 +214,31 @@ class TestRealProfileCdpLaunch:
         assert cdp is None
         assert err and "not a supported Chromium" in err
 
+    def test_explicit_stable_browser_bypasses_non_chromium_default(self):
+        self._reset()
+        with patch.object(bt_cloud, "_use_real_profile", return_value=True), \
+             patch.object(bt_real_profile, "_real_profile_browser_override", return_value=("chrome", None)), \
+             patch("hermes_cli.browser_connect.detect_default_chromium") as detect, \
+             patch("hermes_cli.browser_connect.snapshot_real_profile", return_value=(None, "snapshot-probe")):
+            cdp, err = bt_real_profile._real_profile_cdp()
+        detect.assert_not_called()
+        assert cdp is None
+        assert err and "snapshot-probe" in err
+
+    def test_invalid_explicit_browser_fails_closed(self):
+        self._reset()
+        with patch.object(bt_cloud, "_use_real_profile", return_value=True), \
+             patch.object(
+                 bt_real_profile,
+                 "_real_profile_browser_override",
+                 return_value=(None, "browser.real_profile_browser must be supported"),
+             ), \
+             patch("hermes_cli.browser_connect.detect_default_chromium") as detect:
+            cdp, err = bt_real_profile._real_profile_cdp()
+        detect.assert_not_called()
+        assert cdp is None
+        assert err and "must be supported" in err
+
     def test_snapshot_failure_fails_closed(self):
         self._reset()
         with patch.object(bt_cloud, "_use_real_profile", return_value=True), \

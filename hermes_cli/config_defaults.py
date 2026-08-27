@@ -408,6 +408,11 @@ DEFAULT_CONFIG = {
         # Firefox etc. fails closed. Also gates the browser_exec `local` argument (real-profile
         # local session even under a cloud backend). Desktop Settings -> Browser.
         "use_real_profile": False,
+        # Optional stable Chromium family to use instead of the OS default.
+        # Empty preserves default-browser detection and its fail-closed safety.
+        # This lets a macOS user keep Safari as the everyday default while
+        # explicitly consenting Hermes to use Chrome's active login profile.
+        "real_profile_browser": "",
         # Windows only: a running Chrome/Edge/Brave locks its cookie DB, so the profile can't be
         # copied. When on, a locked profile still blocks and the agent ASKS first; on approval it
         # runs `hermes browser close-profile` (kills that profile's browser tree, unsaved tabs lost)

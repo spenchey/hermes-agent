@@ -19,6 +19,27 @@ from tools import browser_tool_lightpanda_fallback as _lp
 from tools import browser_tool_session as _session
 
 _RP = "browser.use_real_profile is on, but "
+_SUPPORTED_REAL_PROFILE_BROWSERS = frozenset({"chrome", "edge", "brave", "chromium"})
+
+
+def _real_profile_browser_override() -> tuple[Optional[str], Optional[str]]:
+    """Return an explicitly selected stable Chromium family, if configured."""
+    try:
+        from hermes_cli.config import read_raw_config
+
+        cfg = read_raw_config()
+        browser_cfg = cfg.get("browser", {})
+        raw = browser_cfg.get("real_profile_browser", "") if isinstance(browser_cfg, dict) else ""
+    except Exception as exc:
+        _origin().logger.debug("Could not read real_profile_browser from config: %s", exc)
+        return None, None
+
+    browser = str(raw or "").strip().lower()
+    if not browser:
+        return None, None
+    if browser not in _SUPPORTED_REAL_PROFILE_BROWSERS:
+        return None, "browser.real_profile_browser must be one of: chrome, edge, brave, chromium."
+    return browser, None
 
 
 def _terminate_real_profile_chrome() -> None:
@@ -257,7 +278,10 @@ def _real_profile_cdp() -> tuple:
             return cached, None
         _bt._real_profile_cdp_cache.pop("cdp", None)
 
-        browser = detect_default_chromium()
+        browser, override_error = _real_profile_browser_override()
+        if override_error:
+            return None, override_error
+        browser = browser or detect_default_chromium()
         unsupported = _real_profile_unsupported_reason(browser)
         if unsupported:
             return None, unsupported
