@@ -1482,6 +1482,7 @@ def _build_child_agent(
     # ACP transport overrides from trusted delegation config.
     override_acp_command: Optional[str] = None,
     override_acp_args: Optional[List[str]] = None,
+    override_reasoning_effort=None,
     # Per-call role controlling whether the child can further delegate.
     # 'leaf' (default) cannot; 'orchestrator' retains the delegation
     # toolset subject to depth/kill-switch bounds applied below.
@@ -1714,7 +1715,9 @@ def _build_child_agent(
         # Keep the raw value — ``str(x or "")`` would coerce a YAML boolean
         # False (``reasoning_effort: false``) to "" and inherit the parent
         # instead of disabling thinking for children.
-        delegation_effort = delegation_cfg.get("reasoning_effort")
+        delegation_effort = override_reasoning_effort
+        if delegation_effort is None:
+            delegation_effort = delegation_cfg.get("reasoning_effort")
         if delegation_effort or delegation_effort is False:
             from hermes_constants import parse_reasoning_effort
 
@@ -3578,9 +3581,11 @@ def delegate_task(
     # uses it to route its reviewer subagent onto ``auxiliary.review``
     # without touching the global delegation pin.
     try:
+        effective_credentials_cfg = credentials_cfg if credentials_cfg else cfg
         creds = _resolve_delegation_credentials(
-            credentials_cfg if credentials_cfg else cfg, parent_agent
+            effective_credentials_cfg, parent_agent
         )
+        creds["reasoning_effort"] = effective_credentials_cfg.get("reasoning_effort")
     except ValueError as exc:
         return tool_error(str(exc))
 
@@ -3737,6 +3742,7 @@ def delegate_task(
                 override_max_tokens=creds.get("max_output_tokens"),
                 override_acp_command=creds.get("command"),
                 override_acp_args=creds.get("args"),
+                override_reasoning_effort=creds.get("reasoning_effort"),
                 role=effective_role,
             )
         except ValueError as exc:

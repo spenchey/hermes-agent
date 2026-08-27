@@ -165,6 +165,7 @@ def _load_review_credentials_cfg() -> Optional[Dict[str, Any]]:
         "base_url": base_url,
         "api_key": str(review.get("api_key") or "").strip(),
         "api_mode": str(review.get("api_mode") or "").strip(),
+        "reasoning_effort": review.get("reasoning_effort"),
     }
 
 

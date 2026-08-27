@@ -119,6 +119,7 @@ def test_load_review_credentials_cfg_reads_config(monkeypatch):
         lambda: {"auxiliary": {"review": {
             "provider": "openrouter",
             "model": "anthropic/claude-opus-4.6",
+            "reasoning_effort": "high",
         }}},
     )
     cfg = re_mod._load_review_credentials_cfg()
@@ -128,6 +129,7 @@ def test_load_review_credentials_cfg_reads_config(monkeypatch):
         "base_url": "",
         "api_key": "",
         "api_mode": "",
+        "reasoning_effort": "high",
     }
 
 

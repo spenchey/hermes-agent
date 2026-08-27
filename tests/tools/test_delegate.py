@@ -1343,6 +1343,26 @@ class TestDelegationReasoningEffort(unittest.TestCase):
         call_kwargs = MockAgent.call_args[1]
         self.assertEqual(call_kwargs["reasoning_config"], {"enabled": True, "effort": "low"})
 
+    @patch("tools.delegate_tool._load_config")
+    @patch("run_agent.AIAgent")
+    def test_per_call_reasoning_effort_overrides_global_config(self, MockAgent, mock_cfg):
+        """A trusted per-call review pin overrides delegation and parent effort."""
+        mock_cfg.return_value = {"max_iterations": 50, "reasoning_effort": "low"}
+        MockAgent.return_value = MagicMock()
+        parent = _make_mock_parent()
+        parent.reasoning_config = {"enabled": True, "effort": "medium"}
+
+        _build_child_agent(
+            task_index=0, goal="test", context=None, toolsets=None,
+            model=None, max_iterations=50, parent_agent=parent,
+            task_count=1, override_reasoning_effort="high",
+        )
+        call_kwargs = MockAgent.call_args[1]
+        self.assertEqual(
+            call_kwargs["reasoning_config"],
+            {"enabled": True, "effort": "high"},
+        )
+
 # =========================================================================
 # Dispatch helper, progress events, concurrency
 # =========================================================================
