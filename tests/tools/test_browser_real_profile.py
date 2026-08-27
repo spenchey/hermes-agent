@@ -206,6 +206,18 @@ class TestRealProfileCdpLaunch:
             cdp, err = bt_real_profile._real_profile_cdp()
         assert cdp is None and err is None
 
+    def test_missing_named_session_probe_does_not_start_browser(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("AGENT_BROWSER_HOME", str(tmp_path))
+        with patch.object(bt_real_profile.subprocess, "run") as run:
+            assert bt_real_profile._agent_browser_get_cdp("missing-session") is None
+        run.assert_not_called()
+
+    def test_real_profile_session_names_are_isolated_by_copy_dir(self, tmp_path):
+        first = bt_real_profile._real_profile_session_name(str(tmp_path / "pip"))
+        second = bt_real_profile._real_profile_session_name(str(tmp_path / "mac"))
+        assert first.startswith("hermes-real-profile-")
+        assert first != second
+
     def test_non_chromium_default_fails_closed(self):
         self._reset()
         with patch.object(bt_cloud, "_use_real_profile", return_value=True), \
@@ -333,8 +345,9 @@ class TestRealProfileCdpLaunch:
         # #100855: the attach daemon lives in a reaper-visible socket dir claimed by this
         # process, and never self-terminates (Chrome is ours, not the daemon's).
         socket_dir = captured["env"]["AGENT_BROWSER_SOCKET_DIR"]
-        assert socket_dir == str(tmp_path / f"agent-browser-{bt._REAL_PROFILE_SESSION}")
-        assert (tmp_path / f"agent-browser-{bt._REAL_PROFILE_SESSION}" / f"{bt._REAL_PROFILE_SESSION}.owner_pid").read_text() == str(os.getpid())
+        session_name = bt_real_profile._real_profile_session_name(str(tmp_path))
+        assert socket_dir == str(tmp_path / f"agent-browser-{session_name}")
+        assert (tmp_path / f"agent-browser-{session_name}" / f"{session_name}.owner_pid").read_text() == str(os.getpid())
         assert "AGENT_BROWSER_IDLE_TIMEOUT_MS" not in captured["env"]
         self._reset()
 
@@ -394,7 +407,8 @@ class TestRealProfileCdpLaunch:
             cdp, err = bt_real_profile._real_profile_cdp()
         if live_browser_id == "/devtools/browser/x":
             assert (cdp, err) == ("http://127.0.0.1:41000", None)
-            attach.assert_called_once_with(41000, str(tmp_path))
+            session_name = bt_real_profile._real_profile_session_name(str(tmp_path))
+            attach.assert_called_once_with(41000, str(tmp_path), session_name)
             snapshot.assert_not_called()
         else:
             attach.assert_not_called()

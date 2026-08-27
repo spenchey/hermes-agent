@@ -230,7 +230,7 @@ from tools import browser_tool_lightpanda_fallback as _lp
 
 # Single shared real-profile copy-browser session: concurrent tasks reuse it
 # instead of each launching a rival Chromium on the same copied user-data-dir.
-_REAL_PROFILE_SESSION = "hermes-real-profile"
+_REAL_PROFILE_SESSION_PREFIX = "hermes-real-profile"
 _real_profile_cdp_lock = threading.Lock()
 _real_profile_cdp_cache: dict = {}
 _real_profile_chrome_procs: list = []  # Popen handles of directly-launched real browsers
