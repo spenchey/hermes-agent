@@ -254,6 +254,11 @@ def _op_child_env(token_value: str) -> Dict[str, str]:
     # configured Hermes to source it from, so normalize to that name here.
     if token_value:
         env["OP_SERVICE_ACCOUNT_TOKEN"] = token_value
+        # Service-account authentication is fully headless.  Never let the CLI
+        # probe the desktop app in this mode: macOS attributes that protected
+        # app-data access to the parent Python process and displays a permission
+        # prompt for every concurrent Hermes startup.
+        env["OP_LOAD_DESKTOP_APP_SETTINGS"] = "false"
     env["NO_COLOR"] = "1"
     return env
 

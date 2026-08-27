@@ -108,6 +108,23 @@ def test_fetch_happy_path(monkeypatch, tmp_path):
     assert warnings == []
 
 
+def test_service_account_auth_disables_desktop_app_probe(monkeypatch):
+    monkeypatch.setenv("OP_LOAD_DESKTOP_APP_SETTINGS", "true")
+
+    child_env = op._op_child_env("service-account-token")
+
+    assert child_env["OP_SERVICE_ACCOUNT_TOKEN"] == "service-account-token"
+    assert child_env["OP_LOAD_DESKTOP_APP_SETTINGS"] == "false"
+
+
+def test_interactive_auth_preserves_desktop_app_setting(monkeypatch):
+    monkeypatch.setenv("OP_LOAD_DESKTOP_APP_SETTINGS", "true")
+
+    child_env = op._op_child_env("")
+
+    assert child_env["OP_LOAD_DESKTOP_APP_SETTINGS"] == "true"
+
+
 
 
 
@@ -295,7 +312,6 @@ def test_apply_never_overrides_token_var(monkeypatch, tmp_path):
     assert "OP_SERVICE_ACCOUNT_TOKEN" in result.skipped
     assert os.environ["OP_SERVICE_ACCOUNT_TOKEN"] == "original"
     assert calls["n"] == 0
-
 
 
 
