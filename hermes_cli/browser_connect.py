@@ -635,7 +635,16 @@ def snapshot_real_profile(browser: str, src: str | None = None) -> tuple[str | N
     if not src or not os.path.isdir(src):
         return None, (
             f"profile directory for '{browser}' was not found ({src!r}). "
-            "Launch that browser at least once, or turn browser.use_real_profile off.")
+            "Launch that browser at least once, or turn browser.use_real_profile off."
+        )
+    local_state = os.path.join(src, "Local State")
+    if not os.path.isfile(local_state):
+        return None, (
+            f"the '{browser}' profile has not completed its first interactive launch "
+            f"({local_state!r} is missing). Open {browser} once in the desktop "
+            "session, finish its first-run prompts, and sign in to the sites Hermes "
+            "should reuse; then retry."
+        )
     source_profile, resolve_err = _resolve_source_profile(src)
     if resolve_err or not source_profile:
         return None, resolve_err

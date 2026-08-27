@@ -145,6 +145,15 @@ class TestSnapshotRealProfile:
         assert dst is None
         assert err and "was not found" in err
 
+    def test_uninitialized_profile_fails_fast(self, tmp_path, monkeypatch):
+        import hermes_cli.browser_connect as bc
+        src = tmp_path / "real"
+        (src / "Default").mkdir(parents=True)
+        monkeypatch.setattr(bc, "get_hermes_home", lambda: tmp_path / "hh")
+        dst, err = bc.snapshot_real_profile("chrome", src=str(src))
+        assert dst is None
+        assert err and "first interactive launch" in err
+
     def test_snapshot_files_are_owner_only(self, tmp_path, monkeypatch):
         """Every copied file must be 0600 and every dir 0700 (#96729).
 
