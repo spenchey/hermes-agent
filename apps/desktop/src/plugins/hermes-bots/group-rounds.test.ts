@@ -116,6 +116,21 @@ describe('routing', () => {
     expect(parsed.mentioned.size).toBe(1)
   })
 
+  it('does not let an ambiguous bare mention choose a same-name member by array order', async () => {
+    const { rounds } = await loadRoom()
+
+    const twins: GroupMember[] = [
+      { connectionId: 'studio', handle: 'emily-studio', name: 'emily', remoteSource: true },
+      { connectionId: 'mini', handle: 'emily-mini', name: 'emily', remoteSource: true }
+    ]
+
+    const user = (text: string): GroupMessage[] =>
+      [{ at: 1, from: { kind: 'user', name: 'You' }, text }] as GroupMessage[]
+
+    expect(rounds.resolveGroupResponders(user('@emily test'), twins)).toEqual([])
+    expect(rounds.resolveGroupResponders(user('@emily-studio test'), twins)).toEqual([twins[0]])
+  })
+
   it('rotates the lead speaker each round', async () => {
     const { rounds } = await loadRoom()
 

@@ -22,9 +22,18 @@ import {
 } from './group-chat'
 import type { GroupChatRoom, GroupHoldStamp } from './group-chat'
 import { durableGroupChatMembers, groupMemberKey } from './group-membership'
-import { harvestStrandedGroupReply, isGroupPassText, runGroupChatMemberTurn } from './group-turns'
+import {
+  GROUP_LATE_TTL_MS,
+  groupLateNextWait,
+  harvestStrandedGroupReply,
+  isGroupPassText,
+  runGroupChatMemberTurn
+} from './group-turns'
 import { requestForBot } from './routing'
 import type { Attachment, GroupMember, GroupMessage } from './types'
+
+const groupStrandedHarvesters = new Map<string, Promise<void>>()
+let groupStrandedHarvestGeneration = 0
 
 // ── group chats: bounded round-robin coordination over a shared room log ─────
 //
@@ -46,7 +55,8 @@ export function parseGroupChatMentions(text: unknown, members: GroupMember[]) {
   const source = String(text || '')
   const mentioned = new Set<string>()
   let everyone = false
-  const handles = new Map<string, string>()
+  let directed = false
+  const handles = new Map<string, string | null>()
 
   for (const member of members) {
     const title = String(member.title || '').trim()
@@ -75,7 +85,13 @@ export function parseGroupChatMentions(text: unknown, members: GroupMember[]) {
 
     for (const form of forms) {
       if (form) {
-        handles.set(form, groupMemberKey(member))
+        const memberKey = groupMemberKey(member)
+
+        if (handles.has(form) && handles.get(form) !== memberKey) {
+          handles.set(form, null)
+        } else if (!handles.has(form)) {
+          handles.set(form, memberKey)
+        }
       }
     }
   }
@@ -93,6 +109,8 @@ export function parseGroupChatMentions(text: unknown, members: GroupMember[]) {
       continue
     }
 
+    directed = true
+
     const resolved = handles.get(handle) || handles.get(handle.replace(/[._-]+/g, ''))
 
     if (resolved) {
@@ -101,6 +119,7 @@ export function parseGroupChatMentions(text: unknown, members: GroupMember[]) {
   }
 
   return {
+    directed,
     everyone,
     mentioned
   }
@@ -123,6 +142,7 @@ export function resolveGroupResponders(log: GroupMessage[], members: GroupMember
 
   const mentioned = new Set<string>()
   let everyone = false
+  let directed = false
 
   for (const entry of sinceLastUser) {
     const parsed = parseGroupChatMentions(entry.text, members)
@@ -131,12 +151,16 @@ export function resolveGroupResponders(log: GroupMessage[], members: GroupMember
       everyone = true
     }
 
+    if (parsed.directed) {
+      directed = true
+    }
+
     for (const name of parsed.mentioned) {
       mentioned.add(name)
     }
   }
 
-  if (everyone || mentioned.size === 0) {
+  if (everyone || (!mentioned.size && !directed)) {
     return members
   }
 
@@ -908,23 +932,55 @@ export async function runGroupChatRounds(group: string, members: GroupMember[], 
       const strandedLeft = Object.keys(($groupChats.get()[group] || {}).stranded || {})
 
       if (strandedLeft.length && typeof window !== 'undefined') {
-        void harvestStrandedUntilSettled(group, members, thread)
+        startStrandedHarvest(group, members, thread)
       }
     }
   }
 }
 
-/** Bounded background harvest for members whose replies outlived the turn
- *  loop. Polls every 5s for up to 5 minutes; stops early when nothing is
- *  stranded, a new loop takes the room over (it harvests on its own), or the
- *  room record disappears (disband). */
-async function harvestStrandedUntilSettled(group: string, members: GroupMember[], thread: string) {
-  const HARVEST_INTERVAL_MS = 5000
-  const HARVEST_MAX_TRIES = 60
+/** Start at most one late-result harvester per room. */
+export function startStrandedHarvest(group: string, members: GroupMember[], thread = 'legacy') {
+  if (typeof window === 'undefined' || groupStrandedHarvesters.has(group)) {
+    return
+  }
 
-  for (let attempt = 0; attempt < HARVEST_MAX_TRIES; attempt++) {
-    await new Promise(resolve => window.setTimeout(resolve, HARVEST_INTERVAL_MS))
-    const room = $groupChats.get()[group]
+  const generation = groupStrandedHarvestGeneration
+
+  const task = harvestStrandedUntilSettled(group, members, thread, generation).finally(() => {
+    if (groupStrandedHarvesters.get(group) === task) {
+      groupStrandedHarvesters.delete(group)
+    }
+  })
+
+  groupStrandedHarvesters.set(group, task)
+}
+
+export function resumeStrandedHarvesters() {
+  for (const [group, room] of Object.entries($groupChats.get())) {
+    if (Object.keys(room?.stranded || {}).length && Array.isArray(room?.members) && room.members.length) {
+      startStrandedHarvest(group, room.members)
+    }
+  }
+}
+
+export function stopStrandedHarvesters() {
+  groupStrandedHarvestGeneration += 1
+  groupStrandedHarvesters.clear()
+}
+
+/** Bounded background harvest for members whose replies outlived the turn.
+ * Starts at five-minute checks, then cools to 15, 30, and 60 minutes as the
+ * pending turn ages. Durable marker timestamps preserve ladder age across a
+ * Desktop restart. */
+async function harvestStrandedUntilSettled(group: string, members: GroupMember[], thread: string, generation: number) {
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt < GROUP_LATE_TTL_MS) {
+    if (generation !== groupStrandedHarvestGeneration) {
+      return
+    }
+
+    let room = $groupChats.get()[group]
 
     if (!room || room.running) {
       return
@@ -936,8 +992,29 @@ async function harvestStrandedUntilSettled(group: string, members: GroupMember[]
       return
     }
 
+    const remaining = GROUP_LATE_TTL_MS - (Date.now() - startedAt)
+    const wait = Math.max(1, Math.min(groupLateNextWait(room, startedAt), remaining))
+
+    await new Promise(resolve => window.setTimeout(resolve, wait))
+
+    if (generation !== groupStrandedHarvestGeneration) {
+      return
+    }
+
+    room = $groupChats.get()[group]
+
+    if (!room || room.running) {
+      return
+    }
+
+    const currentStranded = room.stranded || {}
+
+    if (!Object.keys(currentStranded).length) {
+      return
+    }
+
     for (const member of members) {
-      if (Object.prototype.hasOwnProperty.call(stranded, groupMemberKey(member))) {
+      if (Object.prototype.hasOwnProperty.call(currentStranded, groupMemberKey(member))) {
         try {
           await harvestStrandedGroupReply(group, member)
         } catch {

@@ -102,6 +102,13 @@ export function selectedRosterBot(roster: RosterRow[], key: string): RosterRow |
   return (Array.isArray(roster) ? roster : []).find(bot => botRosterKey(bot) === key) || null
 }
 
+function isPrivateWorker(bot: RosterRow, metaByName: Record<string, BotMeta>): boolean {
+  const local = botRosterMeta(bot, metaByName)
+  const server = bot?.ui_meta?.['hermes-bots']
+
+  return Boolean(local?.privateWorker || server?.privateWorker)
+}
+
 /** A selected owner whose roster row is absent because its SOURCE is down —
  *  not because the bot is gone. Identity comes from the key itself, so the
  *  selection survives a relaunch with that gateway offline and reconciles
@@ -353,6 +360,7 @@ export function BotsPane() {
     }
   }, [gatewayFilterExists])
   const activeSourceRoster = roster.filter(bot => !bot.remoteSource)
+  const publicActiveSourceRoster = activeSourceRoster.filter(bot => !isPrivateWorker(bot, allMeta))
   // Hidden rows remain fully alive and recoverable at the bottom. Every
   // non-display consumer continues to receive the complete roster.
   const hiddenExpanded = useValue($showHiddenBots)
@@ -512,9 +520,9 @@ export function BotsPane() {
     }
 
     mergeServerMeta(activeSourceRoster, data?.fetchedAt || 0)
-    pullServerAvatars(activeSourceRoster)
+    pullServerAvatars(publicActiveSourceRoster)
     trackInboundActivity(roster)
-    backfillMessagingProtocol(activeSourceRoster)
+    backfillMessagingProtocol(publicActiveSourceRoster)
     // React Query owns the stable server snapshot; derived arrays intentionally
     // follow that snapshot rather than retriggering on their own atom writes.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -10,10 +10,10 @@
 import { host } from '@hermes/plugin-sdk'
 
 import { PROFILE_SESSION_LIST_LIMIT } from './canonical-chat'
-import { $lastRoster } from './data'
+import { $botMeta, $lastRoster } from './data'
 import { $groupChats } from './group-chat'
 import { groupMemberKey } from './group-membership'
-import { backendTargetProfile, botConnectionRoute, requestForBot } from './routing'
+import { backendTargetProfile, botConnectionRoute, botRosterMeta, requestForBot } from './routing'
 import type { GroupMember, RosterRow } from './types'
 
 /** The slice of the plugin context the scheduler needs to park its timer. */
@@ -227,6 +227,13 @@ interface ProfilesListResult {
   profiles?: RosterRow[]
 }
 
+function isPrivateWorker(bot: RosterRow): boolean {
+  const local = botRosterMeta(bot, $botMeta.get())
+  const server = bot?.ui_meta?.['hermes-bots']
+
+  return Boolean(local?.privateWorker || server?.privateWorker)
+}
+
 /** Ownership-based sweep: the id-based sweep above only covers sessions the
  *  plugin recorded ($botMeta canonical chats, $groupChats member sids), but
  *  Bot Mode sessions are ALSO minted outside the plugin — bot-to-bot CLI
@@ -272,7 +279,9 @@ async function sweepBotProfileSessions(nowSeconds = Date.now() / 1000) {
     roster.map(async (bot: RosterRow) => {
       const name = String(bot?.name || '').trim()
 
-      if (!name) {
+      // Private workers are invoked on demand. A reconciliation sweep must
+      // not start and pool their backend merely for Desktop bookkeeping.
+      if (!name || isPrivateWorker(bot)) {
         return
       }
 

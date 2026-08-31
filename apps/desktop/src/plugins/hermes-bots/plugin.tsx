@@ -56,6 +56,7 @@ import {
   updateGroupChat
 } from './group-chat'
 import { groupWorkspaceOwnerKey } from './group-membership'
+import { resumeStrandedHarvesters, stopStrandedHarvesters } from './group-rounds'
 import { annotateOrphanedGroupChatMembers } from './hygiene'
 import { BOTS_LOCALES } from './i18n'
 import { displayName } from './labels'
@@ -297,6 +298,7 @@ export default {
           // empty overwrite and then rendering an empty conversation.
           await pullGroupChatServerState().catch(() => false)
           scheduleGroupChatServerSync($groupChats.get())
+          resumeStrandedHarvesters()
         })
         .catch(() => undefined)
     } catch {
@@ -340,6 +342,7 @@ export default {
     if (typeof ctx.onDispose === 'function') {
       ctx.onDispose(() => {
         stopGroupChatServerSync()
+        stopStrandedHarvesters()
 
         if (typeof unbindProfileListener === 'function') {
           unbindProfileListener()

@@ -31,7 +31,8 @@ interface SweepRow {
   title?: string
 }
 
-const { groupChats, hostMock, lastRoster, requestForBotMock } = vi.hoisted(() => ({
+const { botMeta, groupChats, hostMock, lastRoster, requestForBotMock } = vi.hoisted(() => ({
+  botMeta: { value: {} as Record<string, Record<string, unknown>> },
   groupChats: { value: {} as Record<string, unknown> },
   hostMock: {
     listPersistedSessions: vi.fn(),
@@ -50,7 +51,10 @@ vi.mock('@hermes/plugin-sdk', () => ({ host: hostMock }))
 
 vi.mock('./canonical-chat', () => ({ PROFILE_SESSION_LIST_LIMIT: 200 }))
 
-vi.mock('./data', () => ({ $lastRoster: { get: () => lastRoster.value } }))
+vi.mock('./data', () => ({
+  $botMeta: { get: () => botMeta.value },
+  $lastRoster: { get: () => lastRoster.value }
+}))
 
 vi.mock('./group-chat', () => ({ $groupChats: { get: () => groupChats.value } }))
 
@@ -66,6 +70,8 @@ vi.mock('./routing', () => ({
     (bot?.remoteSource
       ? { connectionId: bot.connectionId, mode: 'remote', profile: bot.name, targetProfile: bot.name }
       : null),
+  botRosterMeta: (bot: RosterRow, meta: Record<string, Record<string, unknown>>) =>
+    meta?.[bot.name] || bot?.ui_meta?.['hermes-bots'] || {},
   requestForBot: requestForBotMock
 }))
 
@@ -98,6 +104,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(1_000_000)
   groupChats.value = {}
+  botMeta.value = {}
   lastRoster.value = []
   hostMock.listPersistedSessions.mockResolvedValue({ sessions: [] })
   hostMock.setPersistedSessionHidden.mockResolvedValue(undefined)
@@ -253,6 +260,16 @@ describe('the title half: each roster bot’s own profile listing', () => {
     expect(hiddenCalls().every(([, options]) => options.hidden)).toBe(true)
     // Remote-source rows keep their immutable source owner on the REST route.
     expect(hiddenCalls().find(([, options]) => options.sessionId === 'r-1')?.[0]?.connectionId).toBe('mini')
+  })
+
+  it('keeps private workers cold during the title sweep', async () => {
+    botMeta.value = { remy: { privateWorker: true } }
+
+    await runSweep()
+
+    const profiles = hostMock.listPersistedSessions.mock.calls.map(([, options]) => options.profile)
+
+    expect(profiles).toEqual(['alpha'])
   })
 
   it('runs beside the id half, and a throwing title sweep never breaks it', async () => {

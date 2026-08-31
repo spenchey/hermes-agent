@@ -87,10 +87,53 @@ current_matches() {
   [[ "$(shasum -a 256 "$TARGET_APP/$RENDERER_REL" 2>/dev/null | awk '{print $1}')" == "$RENDERER_SHA" ]] || return 1
 }
 
+desktop_turns_active() {
+  python3 - <<'PY'
+import glob
+import pathlib
+import sqlite3
+import time
+
+now = time.time()
+active = []
+paths = glob.glob(str(pathlib.Path.home() / '.hermes/profiles/*/state.db'))
+paths.append(str(pathlib.Path.home() / '.hermes/state.db'))
+for path in paths:
+    try:
+        db = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=2)
+        rows = db.execute(
+            "SELECT conversation_id, holder, expires_at FROM session_turn_leases "
+            "WHERE expires_at > ? AND holder LIKE '%platform=desktop%'",
+            (now,),
+        ).fetchall()
+        db.close()
+        active.extend((path, *row) for row in rows)
+    except sqlite3.OperationalError as exc:
+        if 'no such table' not in str(exc).lower():
+            active.append((path, 'READ_ERROR', str(exc), now + 300))
+    except OSError as exc:
+        active.append((path, 'READ_ERROR', str(exc), now + 300))
+
+for row in active:
+    print('\t'.join(map(str, row)))
+PY
+}
+
 if current_matches; then
   printf '%s Hermes production artifact %s verified\n' "$(date -u +%FT%TZ)" "$COMMIT"
   exit 0
 fi
+
+# Never replace Desktop underneath an active agent turn. The launchd guard
+# retries hourly, and an explicit fleet deployment can be rerun later.
+for check in 1 2; do
+  ACTIVE="$(desktop_turns_active)"
+  if [[ -n "$ACTIVE" ]]; then
+    printf '%s Hermes production update deferred; active Desktop turn: %s\n' "$(date -u +%FT%TZ)" "${ACTIVE//$'\n'/; }"
+    exit 0
+  fi
+  [[ "$check" == 1 ]] && sleep 5
+done
 
 if [[ "$SOURCE_MODE" == local ]]; then
   cp "$SOURCE_ROOT/$ARTIFACT_DIR/$ARCHIVE" "$TMP/$ARCHIVE"
@@ -113,12 +156,15 @@ codesign --verify --deep --strict "$CANDIDATE"
 
 OLD_PID="$(pgrep -f '^/Applications/Hermes.app/Contents/MacOS/Hermes$' | head -1 || true)"
 if [[ -n "$OLD_PID" ]]; then
-  kill "$OLD_PID" 2>/dev/null || true
-  for _ in $(seq 1 20); do
+  osascript -e 'tell application "Hermes" to quit' >/dev/null 2>&1 || true
+  for _ in $(seq 1 60); do
     kill -0 "$OLD_PID" 2>/dev/null || break
     sleep 0.5
   done
-  kill -9 "$OLD_PID" 2>/dev/null || true
+  if kill -0 "$OLD_PID" 2>/dev/null; then
+    echo "Hermes did not quit cleanly; update deferred" >&2
+    exit 0
+  fi
 fi
 
 BACKUP="$HOME/.hermes/backups/hermes-desktop-production/$(date +%Y%m%d-%H%M%S)"
@@ -142,7 +188,19 @@ if ! current_matches; then
 fi
 
 open -a "$TARGET_APP"
-sleep 4
-NEW_PID="$(pgrep -f '^/Applications/Hermes.app/Contents/MacOS/Hermes$' | head -1 || true)"
-[[ -n "$NEW_PID" ]]
+NEW_PID=""
+for _ in $(seq 1 60); do
+  NEW_PID="$(pgrep -f '^/Applications/Hermes.app/Contents/MacOS/Hermes$' | head -1 || true)"
+  [[ -n "$NEW_PID" ]] && break
+  sleep 0.5
+done
+if [[ -z "$NEW_PID" ]]; then
+  echo "New Hermes app failed to launch; restoring previous build" >&2
+  rm -rf "$TARGET_APP"
+  if [[ -d "$BACKUP/Hermes.app" ]]; then
+    mv "$BACKUP/Hermes.app" "$TARGET_APP"
+    open -a "$TARGET_APP" || true
+  fi
+  exit 1
+fi
 printf '%s installed Hermes production artifact %s (pid %s -> %s)\n' "$(date -u +%FT%TZ)" "$COMMIT" "${OLD_PID:-none}" "$NEW_PID"

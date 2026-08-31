@@ -358,6 +358,15 @@ describe('legacy display-name descriptors', () => {
     expect(seated[0].connectionId).toBe('local')
   })
 
+  it('migrates a retired local mirror descriptor onto the active primary row', () => {
+    const primary = { name: 'emily', remoteSource: false } as RosterRow
+    const staleMirror = { connectionId: 'local', connectionKind: 'local', name: 'emily', remoteSource: true }
+
+    modules.chat.$groupChats.set(rooms({ room: { log: [], members: [staleMirror] } }))
+
+    expect(modules.membership.groupChatMemberBots('room', [primary], {})[0]).toBe(primary)
+  })
+
   it('pass an exact slug descriptor through untouched', () => {
     const descriptor = {
       connectionId: 'local',

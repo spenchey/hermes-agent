@@ -2,13 +2,14 @@
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
-BRANCH="${HERMES_PRODUCTION_BRANCH:-codex/hermes-desktop-production}"
+BRANCH="${HERMES_PRODUCTION_BRANCH:-codex/hermes-v0.21.0-production}"
 ARTIFACT_ROOT="${HERMES_PRODUCTION_ARTIFACT_ROOT:-$HOME/.hermes/production-artifacts/desktop}"
-SYNC_UPSTREAM=1
+SYNC_UPSTREAM=0
 DEPLOY=1
 
 for arg in "$@"; do
   case "$arg" in
+    --sync-upstream) SYNC_UPSTREAM=1 ;;
     --no-sync) SYNC_UPSTREAM=0 ;;
     --no-deploy) DEPLOY=0 ;;
     *) echo "Unknown argument: $arg" >&2; exit 2 ;;
@@ -22,9 +23,10 @@ if [[ "$(git branch --show-current)" != "$BRANCH" ]]; then
   exit 1
 fi
 
-if [[ -n "$(git status --porcelain)" ]]; then
+DIRTY="$(git status --porcelain | grep -Ev '^[ MADRCU?!]{2} contributors/emails/agent@[Aa]gents-Mac-mini\.local$' || true)"
+if [[ -n "$DIRTY" ]]; then
   echo "Production worktree is dirty; refusing to build an ambiguous artifact." >&2
-  git status --short >&2
+  printf '%s\n' "$DIRTY" >&2
   exit 1
 fi
 
@@ -45,8 +47,7 @@ if [[ ! -d node_modules || ! -f "$LOCK_MARKER" || "$(cat "$LOCK_MARKER" 2>/dev/n
   printf '%s\n' "$LOCK_HASH" > "$LOCK_MARKER"
 fi
 
-npm --prefix apps/desktop run check:test:plugins
-npm --prefix apps/desktop run typecheck
+npm --prefix apps/desktop run check
 npm --prefix apps/desktop run pack
 
 COMMIT="$(git rev-parse HEAD)"

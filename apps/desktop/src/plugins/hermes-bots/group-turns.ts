@@ -403,12 +403,60 @@ async function submitGroupTurnPrompt(
   }
 }
 
-// A member turn that is VISIBLY still working (session reports
-// inflight/running) keeps its slot alive up to this hard cap. The base
-// timeout alone silently dropped long real turns: a 7-minute research run
-// timed out at 3 minutes, read as a pass, and its finished result never
-// reached the room (db's Aug 2026 report).
-const GROUP_TURN_HARD_CAP_MS = 20 * 60000
+export const GROUP_LATE_TTL_MS = 24 * 60 * 60 * 1000
+export const GROUP_LATE_POLL_LADDER = [
+  { until: 1 * 60 * 60 * 1000, delay: 5 * 60 * 1000 },
+  { until: 4 * 60 * 60 * 1000, delay: 15 * 60 * 1000 },
+  { until: 12 * 60 * 60 * 1000, delay: 30 * 60 * 1000 },
+  { until: GROUP_LATE_TTL_MS, delay: 60 * 60 * 1000 }
+] as const
+
+export function groupLatePollDelay(elapsedMs: number): number {
+  const elapsed = Math.max(0, Number(elapsedMs) || 0)
+  const rung = GROUP_LATE_POLL_LADDER.find(entry => elapsed < entry.until)
+
+  return (rung || GROUP_LATE_POLL_LADDER[GROUP_LATE_POLL_LADDER.length - 1]).delay
+}
+
+/** Preserve cooldown age across restarts. Markers from the first durable
+ * build can derive it from expiresAt even though they lack timedOutAt. */
+export function groupLateMarkerStartedAt(
+  marker: number | { expiresAt?: number; timedOutAt?: number } | undefined,
+  fallbackStartedAt: number
+): number {
+  if (!marker || typeof marker !== 'object') {
+    return fallbackStartedAt
+  }
+
+  const timedOutAt = Number(marker.timedOutAt || 0)
+
+  if (timedOutAt > 0) {
+    return timedOutAt
+  }
+
+  const expiresAt = Number(marker.expiresAt || 0)
+
+  return expiresAt > GROUP_LATE_TTL_MS ? expiresAt - GROUP_LATE_TTL_MS : fallbackStartedAt
+}
+
+export function groupLateNextWait(room: GroupChatRoom, fallbackStartedAt: number, now = Date.now()): number {
+  const markers = Object.values(room?.stranded || {})
+  const durableStarts = markers.map(marker => groupLateMarkerStartedAt(marker, 0)).filter(startedAt => startedAt > 0)
+  const youngestStartedAt = durableStarts.length ? Math.max(...durableStarts) : fallbackStartedAt
+  const ladderDelay = groupLatePollDelay(now - youngestStartedAt)
+
+  const expiryTimes = markers
+    .map(marker => (marker && typeof marker === 'object' ? Number(marker.expiresAt || 0) : 0))
+    .filter(expiresAt => expiresAt > 0)
+
+  if (expiryTimes.some(expiresAt => expiresAt <= now)) {
+    return 1
+  }
+
+  const expiryDelays = expiryTimes.map(expiresAt => expiresAt - now)
+
+  return expiryDelays.length ? Math.min(ladderDelay, ...expiryDelays) : ladderDelay
+}
 
 /** Mirror a member's pending prompt — clarify question OR command approval —
  *  from its resume snapshot into the room store, keyed
@@ -698,7 +746,7 @@ async function runGroupChatMemberTurnLeased(
   const liveRuntime = await submitGroupTurnPrompt(member, runtime, stored, turnText)
   runtimeIds.add(liveRuntime)
   const started = Date.now()
-  let deadline = started + GROUP_TURN_TIMEOUT_MS
+  const deadline = started + GROUP_TURN_TIMEOUT_MS
   // After the terminal frame fires, the gateway still has to flip
   // session.running off in its turn `finally` — re-check quickly for a few
   // beats instead of falling back to the slow backstop cadence.
@@ -768,12 +816,8 @@ async function runGroupChatMemberTurnLeased(
       return null
     }
 
-    // Still visibly working — or waiting on the user's answer to a clarify:
-    // extend the deadline (never past the hard cap). A pending question must
-    // outlive the base turn timeout or it dies unanswered at 3 minutes.
-    if (busy || awaitingUser) {
-      deadline = Math.min(started + GROUP_TURN_HARD_CAP_MS, Math.max(deadline, Date.now() + GROUP_TURN_TIMEOUT_MS))
-    }
+    // The foreground room remains bounded at three minutes even while the
+    // member is visibly working. The durable harvester owns later delivery.
   }
 
   // Timeout — clear any still-mirrored question card (the server-side
@@ -786,12 +830,15 @@ async function runGroupChatMemberTurnLeased(
     thread
   })
   syncGroupClarify(group, member, null)
+  const timedOutAt = Date.now()
   updateGroupChat(group, (r: GroupChatRoom) => {
     r.stranded = {
       ...(r.stranded || {}),
       [groupMemberKey(member)]: {
         before,
-        thread
+        thread,
+        timedOutAt,
+        expiresAt: timedOutAt + GROUP_LATE_TTL_MS
       }
     }
 
@@ -811,8 +858,28 @@ export async function harvestStrandedGroupReply(group: string, member: GroupMemb
   // Markers were a bare number before threads; normalize both shapes.
   const strandedBefore = typeof marker === 'number' ? marker : marker?.before
   const strandedThread = (typeof marker === 'object' && marker?.thread) || 'legacy'
+  const strandedExpiresAt = typeof marker === 'object' ? Number(marker?.expiresAt || 0) : 0
 
   if (typeof strandedBefore !== 'number') {
+    return
+  }
+
+  if (strandedExpiresAt && Date.now() >= strandedExpiresAt) {
+    updateGroupChat(group, (r: GroupChatRoom) => {
+      const next = { ...(r.stranded || {}) }
+
+      delete next[memberKey]
+      r.stranded = next
+
+      return r
+    })
+    appendGroupChatEntry(
+      group,
+      { kind: 'system', name: 'Hermes' },
+      `@${member.name}'s background turn did not finish within 24 hours.`,
+      strandedThread
+    )
+
     return
   }
 

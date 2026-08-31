@@ -16,9 +16,12 @@ chmod 755 "$HOME/.local/bin/hermes-desktop-production-ensure"
 "$HOME/.local/bin/hermes-desktop-production-ensure"
 
 for host in "${HOSTS[@]}"; do
-  ssh -o BatchMode=yes "spencerheywood@$host" 'mkdir -p /Users/spencerheywood/.local/bin'
+  if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "spencerheywood@$host" 'mkdir -p /Users/spencerheywood/.local/bin'; then
+    printf 'Deferred %s: host unavailable. Its launchd guard will install the current artifact when reachable.\n' "$host" >&2
+    continue
+  fi
   scp -q "$ENSURE" "spencerheywood@$host:$REMOTE_PATH"
-  ssh -o BatchMode=yes "spencerheywood@$host" "chmod 755 '$REMOTE_PATH' && '$REMOTE_PATH' --install-guard && '$REMOTE_PATH'"
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "spencerheywood@$host" "chmod 755 '$REMOTE_PATH' && '$REMOTE_PATH' --install-guard && '$REMOTE_PATH'"
 done
 
-printf 'Hermes production artifact verified on Studio and both MacBooks.\n'
+printf 'Hermes production artifact deployment attempted on Studio and both MacBooks; each installer reports its verified or deferred state.\n'

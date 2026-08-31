@@ -71,6 +71,8 @@ export interface BotMeta {
   /** Legacy single-group scalar, projected alongside `groups`. */
   group?: null | string
   pinned?: boolean
+  /** Internal on-demand worker; keep cold until a task explicitly invokes it. */
+  privateWorker?: boolean
   shape?: string
   title?: string
   /** Creation timestamp in ms. Deliberately not copied when duplicating a bot. */
@@ -135,7 +137,7 @@ export interface Attachment {
 }
 
 export interface GroupMessageAuthor {
-  kind: 'member' | 'user'
+  kind: 'member' | 'system' | 'user'
   name: string
   /** Connection label, present when the speaker lives on another machine. */
   source?: string
@@ -172,7 +174,7 @@ export interface GroupChat {
    *  `{ name }`, and the sweep re-validates the route before trusting one. */
   sessionOwners?: Record<string, Partial<RosterRow>>
   sessions?: Record<string, string | true>
-  stranded?: Record<string, number | { before: number; thread?: string }>
+  stranded?: Record<string, number | { before: number; expiresAt?: number; thread?: string; timedOutAt?: number }>
   syncRevision?: number
   /** Left behind when a room is disbanded, so sync can't resurrect it. */
   tombstone?: boolean

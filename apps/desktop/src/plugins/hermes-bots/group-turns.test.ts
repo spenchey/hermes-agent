@@ -562,6 +562,35 @@ describe('stranded harvest', () => {
     })
   }
 
+  it('uses the five-minute-to-hourly ladder and preserves marker age', async () => {
+    const { turns } = await loadRoom()
+    const hour = 60 * 60 * 1000
+
+    expect(turns.groupLatePollDelay(0)).toBe(5 * 60 * 1000)
+    expect(turns.groupLatePollDelay(hour)).toBe(15 * 60 * 1000)
+    expect(turns.groupLatePollDelay(4 * hour)).toBe(30 * 60 * 1000)
+    expect(turns.groupLatePollDelay(12 * hour)).toBe(60 * 60 * 1000)
+    expect(turns.groupLateMarkerStartedAt({ expiresAt: 25 * hour }, 7)).toBe(hour)
+  })
+
+  it('expires a late turn once and leaves a visible failure in its original thread', async () => {
+    const room = await loadRoom()
+
+    room.chat.updateGroupChat('Expired', current => {
+      current.stranded = { research: { before: 0, expiresAt: 1, thread: 'thread-7', timedOutAt: 1 } }
+
+      return current
+    })
+
+    await room.turns.harvestStrandedGroupReply('Expired', { name: 'research', title: '' })
+    await room.turns.harvestStrandedGroupReply('Expired', { name: 'research', title: '' })
+
+    expect(log(room, 'Expired')).toHaveLength(1)
+    expect(log(room, 'Expired')[0].thread).toBe('thread-7')
+    expect(log(room, 'Expired')[0].text).toMatch(/did not finish within 24 hours/)
+    expect(room.chat.$groupChats.get().Expired.stranded?.research).toBeUndefined()
+  })
+
   it('posts a late reply into the room and clears the marker', async () => {
     const room = await loadRoom()
 

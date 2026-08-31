@@ -202,9 +202,41 @@ export function groupLastActivity(room?: GroupChat | null) {
   return log.length ? log[log.length - 1].at || 0 : 0
 }
 
+/** Migrate a persisted local mirror (for example `name-this-device`) to the
+ * active primary row when the exact mirror no longer exists. Remote members
+ * stay untouched so an offline machine never silently loses its room seat. */
+function resolveStoredGroupMember(descriptor: RosterRow, roster: RosterRow[]): RosterRow {
+  const rows = Array.isArray(roster) ? roster : []
+  const exact = rows.find(bot => !bot?.ghost && botRosterKey(bot) === botRosterKey(descriptor))
+
+  if (exact) {
+    return exact
+  }
+
+  const descriptorId = String(descriptor?.connectionId || '')
+    .trim()
+    .toLowerCase()
+
+  const descriptorKind = String(descriptor?.connectionKind || '')
+    .trim()
+    .toLowerCase()
+
+  const wasLocalMirror = descriptorId === 'local' || descriptorKind === 'local'
+
+  if (!wasLocalMirror) {
+    return descriptor
+  }
+
+  const name = String(descriptor?.name || '').trim()
+  const activePrimary = rows.find(bot => !bot?.remoteSource && String(bot?.name || '').trim() === name)
+
+  return activePrimary || descriptor
+}
+
 /** Seat a group's member roster: local bots whose meta names the group, plus
  *  the room record's stored descriptors (remote members can't ride bot-meta).
- *  Prefers the LIVE roster row for a stored descriptor when present. */
+ *  Prefers the LIVE roster row for a stored descriptor when present and
+ *  migrates suppressed local mirrors to the active primary row. */
 export function groupChatMemberBots(
   group: string,
   roster: RosterRow[],
@@ -225,8 +257,9 @@ export function groupChatMemberBots(
     // include the descriptor's name IS this member. The next persistence
     // pass (durableGroupChatMembers writes from the seated roster) rewrites
     // the stored descriptor to the slug, so the repair is self-healing.
-    const resolved = resolveLegacyMemberDescriptor(descriptor, roster)
-    const key = botRosterKey(resolved)
+    const legacyResolved = resolveLegacyMemberDescriptor(descriptor, roster)
+    const member = resolveStoredGroupMember(legacyResolved, roster)
+    const key = botRosterKey(member)
 
     if (seated.has(key)) {
       continue
@@ -236,7 +269,7 @@ export function groupChatMemberBots(
     // A selected-but-offline ghost intentionally carries only enough identity
     // to paint the roster. Never let it replace the room's durable descriptor,
     // which owns the full handle/title used by mentions and remote sync.
-    remote.push((roster || []).find(bot => !bot?.ghost && botRosterKey(bot) === key) || resolved)
+    remote.push((roster || []).find(bot => !bot?.ghost && botRosterKey(bot) === key) || member)
   }
 
   return [...local, ...remote]
