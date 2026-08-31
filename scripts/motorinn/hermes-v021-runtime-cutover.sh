@@ -8,7 +8,8 @@ PLIST_DIR="$HOME/Library/LaunchAgents"
 DESKTOP_PLIST="$PLIST_DIR/com.spencer.hermes-desktop-backend.plist"
 BACKUP_ROOT="$HOME/.hermes/backups/hermes-runtime-cutover/$(date +%Y%m%d-%H%M%S)"
 PLIST_BUDDY=/usr/libexec/PlistBuddy
-DOMAIN="gui/$(id -u)"
+GUI_DOMAIN="gui/$(id -u)"
+USER_DOMAIN="user/$(id -u)"
 OLD_LINK="$(readlink "$HOME/.local/bin/hermes" 2>/dev/null || true)"
 APPLIED=0
 DEFERRED_PROFILE="${HERMES_DEFERRED_PROFILE:-}"
@@ -63,16 +64,24 @@ label_for() {
   "$PLIST_BUDDY" -c 'Print :Label' "$1"
 }
 
+domain_for_label() {
+  case "$1" in
+    ai.hermes.gateway*) printf '%s' "$USER_DOMAIN" ;;
+    *) printf '%s' "$GUI_DOMAIN" ;;
+  esac
+}
+
 restart_plist() {
-  local plist="$1" label attempt state old_pid old_pgid
+  local plist="$1" label domain attempt state old_pid old_pgid
   label="$(label_for "$plist")"
+  domain="$(domain_for_label "$label")"
   state="$(launchctl list "$label" 2>/dev/null || true)"
   old_pid="$(printf '%s\n' "$state" | sed -n 's/^[[:space:]]*"PID" = \([0-9][0-9]*\);/\1/p')"
   old_pgid=""
   if [[ -n "$old_pid" ]]; then
     old_pgid="$(ps -p "$old_pid" -o pgid= 2>/dev/null | tr -d ' ' || true)"
   fi
-  launchctl bootout "$DOMAIN/$label" >/dev/null 2>&1 || true
+  launchctl bootout "$domain/$label" >/dev/null 2>&1 || true
 
   if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
     if [[ -n "$old_pgid" ]]; then
@@ -102,7 +111,7 @@ restart_plist() {
   fi
 
   for attempt in 1 2 3 4 5; do
-    if launchctl bootstrap "$DOMAIN" "$plist"; then
+    if launchctl bootstrap "$domain" "$plist"; then
       return 0
     fi
     sleep $((attempt * 2))
@@ -118,7 +127,7 @@ restore_previous() {
     set +e
     for plist in "${plists[@]}"; do
       label="$(label_for "$plist" 2>/dev/null || true)"
-      [[ -n "$label" ]] && launchctl bootout "$DOMAIN/$label" >/dev/null 2>&1 || true
+      [[ -n "$label" ]] && launchctl bootout "$(domain_for_label "$label")/$label" >/dev/null 2>&1 || true
     done
     for plist in "${plists[@]}"; do
       cp -p "$BACKUP_ROOT/$(basename "$plist")" "$plist"
