@@ -30,12 +30,12 @@ if [[ -n "$DIRTY" ]]; then
   exit 1
 fi
 
-BUILD_COMMIT="$(git rev-parse HEAD)"
-
 if [[ "$SYNC_UPSTREAM" == 1 ]]; then
   git fetch --no-tags upstream main
   git rebase upstream/main
 fi
+
+BUILD_COMMIT="$(git rev-parse HEAD)"
 
 if git ls-remote --exit-code production refs/heads/main >/dev/null 2>&1; then
   git fetch --no-tags production main
