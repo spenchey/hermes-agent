@@ -53,12 +53,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ -f "$SOURCE_ROOT/current.json" ]]; then
+if ssh -o BatchMode=yes -o ConnectTimeout=10 "$SOURCE_HOST" "cat '$SOURCE_ROOT/current.json'" > "$TMP/manifest.json" 2>/dev/null; then
+  SOURCE_MODE=remote
+elif [[ -f "$SOURCE_ROOT/current.json" ]]; then
   cp "$SOURCE_ROOT/current.json" "$TMP/manifest.json"
   SOURCE_MODE=local
 else
-  ssh -o BatchMode=yes -o ConnectTimeout=10 "$SOURCE_HOST" "cat '$SOURCE_ROOT/current.json'" > "$TMP/manifest.json"
-  SOURCE_MODE=remote
+  echo "Hermes production manifest is unavailable from both source host and local cache" >&2
+  exit 1
 fi
 
 read_json() {
@@ -162,7 +164,14 @@ if [[ -n "$OLD_PID" ]]; then
     sleep 0.5
   done
   if kill -0 "$OLD_PID" 2>/dev/null; then
-    echo "Hermes did not quit cleanly; update deferred" >&2
+    kill -TERM "$OLD_PID" 2>/dev/null || true
+    for _ in $(seq 1 60); do
+      kill -0 "$OLD_PID" 2>/dev/null || break
+      sleep 0.5
+    done
+  fi
+  if kill -0 "$OLD_PID" 2>/dev/null; then
+    echo "Hermes ignored both application quit and TERM; update deferred" >&2
     exit 0
   fi
 fi
