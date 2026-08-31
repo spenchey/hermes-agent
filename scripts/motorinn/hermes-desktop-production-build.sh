@@ -30,6 +30,8 @@ if [[ -n "$DIRTY" ]]; then
   exit 1
 fi
 
+BUILD_COMMIT="$(git rev-parse HEAD)"
+
 if [[ "$SYNC_UPSTREAM" == 1 ]]; then
   git fetch --no-tags upstream main
   git rebase upstream/main
@@ -48,9 +50,9 @@ if [[ ! -d node_modules || ! -f "$LOCK_MARKER" || "$(cat "$LOCK_MARKER" 2>/dev/n
 fi
 
 npm --prefix apps/desktop run check
-npm --prefix apps/desktop run pack
+GITHUB_SHA="$BUILD_COMMIT" GITHUB_REF_NAME="$BRANCH" npm --prefix apps/desktop run pack
 
-COMMIT="$(git rev-parse HEAD)"
+COMMIT="$BUILD_COMMIT"
 SHORT="$(git rev-parse --short=12 HEAD)"
 VERSION="$(node -p "require('./apps/desktop/package.json').version")"
 BUILD_ID="${VERSION}-${SHORT}"
