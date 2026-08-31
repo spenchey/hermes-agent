@@ -128,12 +128,12 @@ for plist in "${plists[@]}"; do
   pid="$(launchctl list | awk -v label="$label" '$3 == label && $1 ~ /^[0-9]+$/ { print $1 }')"
   if [[ -z "$pid" ]]; then
     echo "$label did not start" >&2
-    exit 1
+    false
   fi
   command="$(ps -p "$pid" -o command=)"
   if [[ "$command" != *"$NEW_RUNTIME"* ]]; then
     echo "$label is not using $NEW_RUNTIME: $command" >&2
-    exit 1
+    false
   fi
   printf '%s\t%s\n' "$label" "$pid"
 done
