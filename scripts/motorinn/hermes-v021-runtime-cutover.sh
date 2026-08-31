@@ -120,7 +120,7 @@ for plist in "${plists[@]}"; do
 done
 
 sleep 8
-health="$(curl -fsS --max-time 5 http://127.0.0.1:9119/health)"
+health="$(curl -fsS --max-time 5 http://127.0.0.1:9119/api/health)"
 printf '%s' "$health" | grep -q '"version":"0.21.0"'
 
 for plist in "${plists[@]}"; do
