@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -Eeuo pipefail
 
 NEW_RUNTIME="${HERMES_NEW_RUNTIME:-$HOME/.hermes/runtimes/hermes-v2026.8.31-69d5eed4a751}"
 NEW_WORKTREE="${HERMES_NEW_WORKTREE:-$HOME/.hermes/worktrees/hermes-v0.21.0-production}"
@@ -64,10 +64,17 @@ label_for() {
 }
 
 restart_plist() {
-  local plist="$1" label
+  local plist="$1" label attempt
   label="$(label_for "$plist")"
   launchctl bootout "$DOMAIN/$label" >/dev/null 2>&1 || true
-  launchctl bootstrap "$DOMAIN" "$plist"
+  for attempt in 1 2 3; do
+    if launchctl bootstrap "$DOMAIN" "$plist"; then
+      return 0
+    fi
+    sleep "$attempt"
+  done
+  echo "Failed to bootstrap $label after 3 attempts" >&2
+  return 1
 }
 
 restore_previous() {
@@ -85,7 +92,7 @@ restore_previous() {
     ln -sfn "$OLD_LINK" "$HOME/.local/bin/hermes"
   fi
   for plist in "${plists[@]}"; do
-    launchctl bootstrap "$DOMAIN" "$plist" >/dev/null 2>&1 || true
+    restart_plist "$plist" >/dev/null 2>&1 || true
   done
   echo "Hermes v0.21 runtime cutover failed; prior launchd definitions were restored." >&2
 }
