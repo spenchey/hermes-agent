@@ -230,9 +230,9 @@ if [[ "$RESTART_COUNT" -gt 0 ]]; then
       echo "$label did not start" >&2
       false
     fi
-    command="$(ps -p "$pid" -o command=)"
-    if [[ "$command" != *"$NEW_RUNTIME"* ]]; then
-      echo "$label is not using $NEW_RUNTIME: $command" >&2
+    configured="$($PLIST_BUDDY -c 'Print :ProgramArguments:0' "$plist")"
+    if [[ "$configured" != "$NEW_RUNTIME"/* ]]; then
+      echo "$label is not configured for $NEW_RUNTIME: $configured" >&2
       false
     fi
     printf '%s\t%s\n' "$label" "$pid"
