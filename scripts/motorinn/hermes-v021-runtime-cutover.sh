@@ -64,37 +64,73 @@ label_for() {
 }
 
 restart_plist() {
-  local plist="$1" label attempt
+  local plist="$1" label attempt state old_pid old_pgid
   label="$(label_for "$plist")"
+  state="$(launchctl list "$label" 2>/dev/null || true)"
+  old_pid="$(printf '%s\n' "$state" | sed -n 's/^[[:space:]]*"PID" = \([0-9][0-9]*\);/\1/p')"
+  old_pgid=""
+  if [[ -n "$old_pid" ]]; then
+    old_pgid="$(ps -p "$old_pid" -o pgid= 2>/dev/null | tr -d ' ' || true)"
+  fi
   launchctl bootout "$DOMAIN/$label" >/dev/null 2>&1 || true
-  for attempt in 1 2 3; do
+
+  if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+    if [[ -n "$old_pgid" ]]; then
+      kill -TERM -- "-$old_pgid" 2>/dev/null || true
+    else
+      kill -TERM "$old_pid" 2>/dev/null || true
+    fi
+  fi
+
+  for attempt in $(seq 1 30); do
+    if ! launchctl list "$label" >/dev/null 2>&1 && \
+       { [[ -z "$old_pid" ]] || ! kill -0 "$old_pid" 2>/dev/null; }; then
+      break
+    fi
+    sleep 1
+  done
+  if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+    [[ -n "$old_pgid" ]] && kill -KILL -- "-$old_pgid" 2>/dev/null || kill -KILL "$old_pid" 2>/dev/null || true
+  fi
+  for attempt in $(seq 1 10); do
+    launchctl list "$label" >/dev/null 2>&1 || break
+    sleep 1
+  done
+  if launchctl list "$label" >/dev/null 2>&1; then
+    echo "Failed to unload $label before runtime cutover" >&2
+    return 1
+  fi
+
+  for attempt in 1 2 3 4 5; do
     if launchctl bootstrap "$DOMAIN" "$plist"; then
       return 0
     fi
-    sleep "$attempt"
+    sleep $((attempt * 2))
   done
-  echo "Failed to bootstrap $label after 3 attempts" >&2
+  echo "Failed to bootstrap $label after 5 attempts" >&2
   return 1
 }
 
 restore_previous() {
   local plist label
   [[ "$APPLIED" == 1 ]] || return 0
-  set +e
-  for plist in "${plists[@]}"; do
-    label="$(label_for "$plist" 2>/dev/null || true)"
-    [[ -n "$label" ]] && launchctl bootout "$DOMAIN/$label" >/dev/null 2>&1 || true
-  done
-  for plist in "${plists[@]}"; do
-    cp -p "$BACKUP_ROOT/$(basename "$plist")" "$plist"
-  done
-  if [[ -n "$OLD_LINK" ]]; then
-    ln -sfn "$OLD_LINK" "$HOME/.local/bin/hermes"
-  fi
-  for plist in "${plists[@]}"; do
-    restart_plist "$plist" >/dev/null 2>&1 || true
-  done
-  echo "Hermes v0.21 runtime cutover failed; prior launchd definitions were restored." >&2
+  (
+    set +e
+    for plist in "${plists[@]}"; do
+      label="$(label_for "$plist" 2>/dev/null || true)"
+      [[ -n "$label" ]] && launchctl bootout "$DOMAIN/$label" >/dev/null 2>&1 || true
+    done
+    for plist in "${plists[@]}"; do
+      cp -p "$BACKUP_ROOT/$(basename "$plist")" "$plist"
+    done
+    if [[ -n "$OLD_LINK" ]]; then
+      ln -sfn "$OLD_LINK" "$HOME/.local/bin/hermes"
+    fi
+    for plist in "${plists[@]}"; do
+      restart_plist "$plist" >/dev/null 2>&1 || true
+    done
+    echo "Hermes v0.21 runtime cutover failed; prior launchd definitions were restored." >&2
+  )
 }
 trap restore_previous ERR
 
