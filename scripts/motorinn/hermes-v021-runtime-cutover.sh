@@ -26,6 +26,7 @@ active_turns() {
       "SELECT conversation_id, holder, expires_at FROM session_turn_leases WHERE expires_at > $now;" 2>/dev/null || true)"
     [[ -n "$rows" ]] && printf '%s\t%s\n' "$db" "$rows"
   done
+  return 0
 }
 
 label_for() {
