@@ -11,17 +11,47 @@ PLIST_BUDDY=/usr/libexec/PlistBuddy
 DOMAIN="gui/$(id -u)"
 OLD_LINK="$(readlink "$HOME/.local/bin/hermes" 2>/dev/null || true)"
 APPLIED=0
+DEFERRED_PROFILE="${HERMES_DEFERRED_PROFILE:-}"
+ONLY_PROFILE="${HERMES_ONLY_PROFILE:-}"
 
-plists=("$DESKTOP_PLIST")
+if [[ -n "$DEFERRED_PROFILE" && -n "$ONLY_PROFILE" ]]; then
+  echo "HERMES_DEFERRED_PROFILE and HERMES_ONLY_PROFILE are mutually exclusive" >&2
+  exit 2
+fi
+
+plists=()
+PLIST_COUNT=0
+if [[ -z "$ONLY_PROFILE" ]]; then
+  plists+=("$DESKTOP_PLIST")
+  PLIST_COUNT=$((PLIST_COUNT + 1))
+fi
 for plist in "$PLIST_DIR"/ai.hermes.gateway*.plist; do
-  [[ -f "$plist" ]] && plists+=("$plist")
+  [[ -f "$plist" ]] || continue
+  profile="$(basename "$plist")"
+  profile="${profile#ai.hermes.gateway-}"
+  profile="${profile%.plist}"
+  [[ "$profile" == "ai.hermes.gateway" ]] && profile="default"
+  [[ -n "$DEFERRED_PROFILE" && "$profile" == "$DEFERRED_PROFILE" ]] && continue
+  [[ -n "$ONLY_PROFILE" && "$profile" != "$ONLY_PROFILE" ]] && continue
+  plists+=("$plist")
+  PLIST_COUNT=$((PLIST_COUNT + 1))
 done
+if [[ "$PLIST_COUNT" -eq 0 ]]; then
+  echo "No launchd service matched the requested runtime cutover scope" >&2
+  exit 1
+fi
 
 active_turns() {
   local now db rows
   now="$(date +%s)"
   for db in "$HOME/.hermes/state.db" "$HOME"/.hermes/profiles/*/state.db; do
     [[ -f "$db" ]] || continue
+    if [[ -n "$DEFERRED_PROFILE" && "$db" == "$HOME/.hermes/profiles/$DEFERRED_PROFILE/state.db" ]]; then
+      continue
+    fi
+    if [[ -n "$ONLY_PROFILE" && "$db" != "$HOME/.hermes/profiles/$ONLY_PROFILE/state.db" ]]; then
+      continue
+    fi
     rows="$(sqlite3 -separator $'\t' "$db" \
       "SELECT conversation_id, holder, expires_at FROM session_turn_leases WHERE expires_at > $now;" 2>/dev/null || true)"
     [[ -n "$rows" ]] && printf '%s\t%s\n' "$db" "$rows"
