@@ -21,10 +21,16 @@ if [[ -n "$DEFERRED_PROFILE" && -n "$ONLY_PROFILE" ]]; then
 fi
 
 plists=()
+restart_plists=()
 PLIST_COUNT=0
+RESTART_COUNT=0
 if [[ -z "$ONLY_PROFILE" ]]; then
   plists+=("$DESKTOP_PLIST")
   PLIST_COUNT=$((PLIST_COUNT + 1))
+  if launchctl list com.spencer.hermes-desktop-backend >/dev/null 2>&1; then
+    restart_plists+=("$DESKTOP_PLIST")
+    RESTART_COUNT=$((RESTART_COUNT + 1))
+  fi
 fi
 for plist in "$PLIST_DIR"/ai.hermes.gateway*.plist; do
   [[ -f "$plist" ]] || continue
@@ -36,6 +42,11 @@ for plist in "$PLIST_DIR"/ai.hermes.gateway*.plist; do
   [[ -n "$ONLY_PROFILE" && "$profile" != "$ONLY_PROFILE" ]] && continue
   plists+=("$plist")
   PLIST_COUNT=$((PLIST_COUNT + 1))
+  label="$($PLIST_BUDDY -c 'Print :Label' "$plist")"
+  if launchctl list "$label" >/dev/null 2>&1; then
+    restart_plists+=("$plist")
+    RESTART_COUNT=$((RESTART_COUNT + 1))
+  fi
 done
 if [[ "$PLIST_COUNT" -eq 0 ]]; then
   echo "No launchd service matched the requested runtime cutover scope" >&2
@@ -125,19 +136,23 @@ restore_previous() {
   [[ "$APPLIED" == 1 ]] || return 0
   (
     set +e
-    for plist in "${plists[@]}"; do
-      label="$(label_for "$plist" 2>/dev/null || true)"
-      [[ -n "$label" ]] && launchctl bootout "$(domain_for_label "$label")/$label" >/dev/null 2>&1 || true
-    done
+    if [[ "$RESTART_COUNT" -gt 0 ]]; then
+      for plist in "${restart_plists[@]}"; do
+        label="$(label_for "$plist" 2>/dev/null || true)"
+        [[ -n "$label" ]] && launchctl bootout "$(domain_for_label "$label")/$label" >/dev/null 2>&1 || true
+      done
+    fi
     for plist in "${plists[@]}"; do
       cp -p "$BACKUP_ROOT/$(basename "$plist")" "$plist"
     done
     if [[ -n "$OLD_LINK" ]]; then
       ln -sfn "$OLD_LINK" "$HOME/.local/bin/hermes"
     fi
-    for plist in "${plists[@]}"; do
-      restart_plist "$plist" >/dev/null 2>&1 || true
-    done
+    if [[ "$RESTART_COUNT" -gt 0 ]]; then
+      for plist in "${restart_plists[@]}"; do
+        restart_plist "$plist" >/dev/null 2>&1 || true
+      done
+    fi
     echo "Hermes v0.21 runtime cutover failed; prior launchd definitions were restored." >&2
   )
 }
@@ -197,28 +212,32 @@ done
 
 ln -sfn "$NEW_RUNTIME/bin/hermes" "$HOME/.local/bin/hermes"
 
-for plist in "${plists[@]}"; do
-  restart_plist "$plist"
-done
+if [[ "$RESTART_COUNT" -gt 0 ]]; then
+  for plist in "${restart_plists[@]}"; do
+    restart_plist "$plist"
+  done
+fi
 
 sleep 8
 health="$(curl -fsS --max-time 5 http://127.0.0.1:9119/api/health)"
 printf '%s' "$health" | grep -q '"version":"0.21.0"'
 
-for plist in "${plists[@]}"; do
-  label="$(label_for "$plist")"
-  pid="$(launchctl list | awk -v label="$label" '$3 == label && $1 ~ /^[0-9]+$/ { print $1 }')"
-  if [[ -z "$pid" ]]; then
-    echo "$label did not start" >&2
-    false
-  fi
-  command="$(ps -p "$pid" -o command=)"
-  if [[ "$command" != *"$NEW_RUNTIME"* ]]; then
-    echo "$label is not using $NEW_RUNTIME: $command" >&2
-    false
-  fi
-  printf '%s\t%s\n' "$label" "$pid"
-done
+if [[ "$RESTART_COUNT" -gt 0 ]]; then
+  for plist in "${restart_plists[@]}"; do
+    label="$(label_for "$plist")"
+    pid="$(launchctl list | awk -v label="$label" '$3 == label && $1 ~ /^[0-9]+$/ { print $1 }')"
+    if [[ -z "$pid" ]]; then
+      echo "$label did not start" >&2
+      false
+    fi
+    command="$(ps -p "$pid" -o command=)"
+    if [[ "$command" != *"$NEW_RUNTIME"* ]]; then
+      echo "$label is not using $NEW_RUNTIME: $command" >&2
+      false
+    fi
+    printf '%s\t%s\n' "$label" "$pid"
+  done
+fi
 
 APPLIED=0
 trap - ERR
