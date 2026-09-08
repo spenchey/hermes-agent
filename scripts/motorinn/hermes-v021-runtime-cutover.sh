@@ -14,7 +14,12 @@ OLD_LINK="$(readlink "$HOME/.local/bin/hermes" 2>/dev/null || true)"
 APPLIED=0
 DEFERRED_PROFILE="${HERMES_DEFERRED_PROFILE:-}"
 ONLY_PROFILE="${HERMES_ONLY_PROFILE:-}"
+BACKEND_ONLY="${HERMES_BACKEND_ONLY:-0}"
 
+if [[ "$BACKEND_ONLY" == 1 && ( -n "$DEFERRED_PROFILE" || -n "$ONLY_PROFILE" ) ]]; then
+  echo "HERMES_BACKEND_ONLY cannot be combined with profile selectors" >&2
+  exit 2
+fi
 if [[ -n "$DEFERRED_PROFILE" && -n "$ONLY_PROFILE" ]]; then
   echo "HERMES_DEFERRED_PROFILE and HERMES_ONLY_PROFILE are mutually exclusive" >&2
   exit 2
@@ -33,6 +38,7 @@ if [[ -z "$ONLY_PROFILE" ]]; then
   fi
 fi
 for plist in "$PLIST_DIR"/ai.hermes.gateway*.plist; do
+  [[ "$BACKEND_ONLY" == 1 ]] && continue
   [[ -f "$plist" ]] || continue
   profile="$(basename "$plist")"
   profile="${profile#ai.hermes.gateway-}"
