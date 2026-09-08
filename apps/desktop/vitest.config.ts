@@ -22,6 +22,11 @@ const electronNative: TestProjectConfiguration = {
   test: {
     name: 'electron',
     environment: 'node',
+    // Several platform tests intentionally create real child processes and Git
+    // worktrees. Keep the runner from oversubscribing the host, and give those
+    // integration-style checks enough wall-clock room under normal contention.
+    maxWorkers: 8,
+    testTimeout: 60_000,
     // `e2e/**/*.unit.test.ts` is the e2e HELPERS, not the specs: plain node
     // modules that should be provable without booting Electron. Playwright
     // ignores the same pattern so they run in exactly one runner.
