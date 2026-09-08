@@ -60,8 +60,12 @@ if [[ "$PLIST_COUNT" -eq 0 ]]; then
 fi
 
 active_turns() {
-  local now db rows
+  local now db rows lease_scope
   now="$(date +%s)"
+  lease_scope=""
+  if [[ "$BACKEND_ONLY" == 1 ]]; then
+    lease_scope=" AND holder LIKE '%platform=desktop%'"
+  fi
   for db in "$HOME/.hermes/state.db" "$HOME"/.hermes/profiles/*/state.db; do
     [[ -f "$db" ]] || continue
     if [[ -n "$DEFERRED_PROFILE" && "$db" == "$HOME/.hermes/profiles/$DEFERRED_PROFILE/state.db" ]]; then
@@ -71,7 +75,7 @@ active_turns() {
       continue
     fi
     rows="$(sqlite3 -separator $'\t' "$db" \
-      "SELECT conversation_id, holder, expires_at FROM session_turn_leases WHERE expires_at > $now;" 2>/dev/null || true)"
+      "SELECT conversation_id, holder, expires_at FROM session_turn_leases WHERE expires_at > $now$lease_scope;" 2>/dev/null || true)"
     [[ -n "$rows" ]] && printf '%s\t%s\n' "$db" "$rows"
   done
   return 0
