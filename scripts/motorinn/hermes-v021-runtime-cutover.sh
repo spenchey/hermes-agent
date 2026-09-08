@@ -218,9 +218,21 @@ if [[ "$RESTART_COUNT" -gt 0 ]]; then
   done
 fi
 
-sleep 8
-health="$(curl -fsS --max-time 5 http://127.0.0.1:9119/api/health)"
-printf '%s' "$health" | grep -q '"version":"0.21.0"'
+health=""
+for attempt in $(seq 1 18); do
+  if health="$(/usr/bin/curl -fsS --max-time 5 http://127.0.0.1:9119/api/health 2>/dev/null)"; then
+    break
+  fi
+  sleep 5
+done
+printf '%s' "$health" | /usr/bin/grep -q "\"version\":\"$EXPECTED_VERSION\""
+
+# A listening socket is not sufficient for Desktop: the client depends on
+# status, and large profile stores can expose a backend that accepts HTTP but
+# never completes its session inventory. Keep rollback armed until status is
+# both responsive and stamped with the candidate version.
+status="$(/usr/bin/curl -fsS --max-time 30 http://127.0.0.1:9119/api/status)"
+printf '%s' "$status" | /usr/bin/grep -q "\"version\":\"$EXPECTED_VERSION\""
 
 if [[ "$RESTART_COUNT" -gt 0 ]]; then
   for plist in "${restart_plists[@]}"; do
