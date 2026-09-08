@@ -77,7 +77,7 @@ label_for() {
 
 domain_for_label() {
   case "$1" in
-    ai.hermes.gateway*) printf '%s' "$USER_DOMAIN" ;;
+    ai.hermes.gateway*|com.spencer.hermes-desktop-backend) printf '%s' "$USER_DOMAIN" ;;
     *) printf '%s' "$GUI_DOMAIN" ;;
   esac
 }
