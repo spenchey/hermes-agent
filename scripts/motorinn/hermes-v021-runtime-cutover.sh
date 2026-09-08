@@ -142,6 +142,7 @@ restart_plist() {
 }
 
 restore_previous() {
+  trap - ERR
   local plist label
   [[ "$APPLIED" == 1 ]] || return 0
   (
@@ -236,6 +237,7 @@ for attempt in $(seq 1 18); do
   sleep 5
 done
 printf '%s' "$health" | /usr/bin/grep -q "\"version\":\"$EXPECTED_VERSION\""
+printf 'Hermes backend health verified at %s.\n' "$EXPECTED_VERSION"
 
 # A listening socket is not sufficient for Desktop: the client depends on
 # status, and large profile stores can expose a backend that accepts HTTP but
@@ -243,6 +245,7 @@ printf '%s' "$health" | /usr/bin/grep -q "\"version\":\"$EXPECTED_VERSION\""
 # both responsive and stamped with the candidate version.
 status="$(/usr/bin/curl -fsS --max-time 30 http://127.0.0.1:9119/api/status)"
 printf '%s' "$status" | /usr/bin/grep -q "\"version\":\"$EXPECTED_VERSION\""
+printf 'Hermes backend status verified at %s.\n' "$EXPECTED_VERSION"
 
 if [[ "$RESTART_COUNT" -gt 0 ]]; then
   for plist in "${restart_plists[@]}"; do
