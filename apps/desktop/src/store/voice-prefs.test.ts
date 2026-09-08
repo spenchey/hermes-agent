@@ -15,7 +15,10 @@ it('keeps the desktop toggle local across config refreshes', async () => {
       localStorage.clear()
       vi.resetModules()
       const prefs = await import('./voice-prefs')
-      const write = vi.spyOn(localStorage, 'setItem')
+      // jsdom exposes Storage methods on the prototype. Spying on the instance is
+      // ignored by window.localStorage in Vitest 4, so the simulated quota failure
+      // silently writes and makes this regression test fail for the wrong reason.
+      const write = vi.spyOn(Storage.prototype, 'setItem')
 
       if (fails) {
         write.mockImplementation(() => {
@@ -44,7 +47,7 @@ it('migrates the legacy preference once, not on every refresh', async () => {
       localStorage.clear()
       vi.resetModules()
       const prefs = await import('./voice-prefs')
-      const write = vi.spyOn(localStorage, 'setItem')
+      const write = vi.spyOn(Storage.prototype, 'setItem')
 
       if (fails) {
         write.mockImplementation(() => {

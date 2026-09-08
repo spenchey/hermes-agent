@@ -54,6 +54,7 @@ _open_session_db_for_profile = late("_open_session_db_for_profile", "hermes_cli.
 
 
 _STATUS_ACTIVE_SESSIONS_TIMEOUT = 0.75
+_STATUS_ACTIVE_SESSIONS_QUERY_TIMEOUT = 0.20
 _GATEWAY_HEALTH_ROUTE_TIMEOUT = 1.0
 _HEALTHY_PLATFORM_STATES = {"connected", "running", "ok"}
 
@@ -67,21 +68,55 @@ def _safe_call(mod, fn_name: str, default):
 
 
 def _count_status_active_sessions() -> int:
-    """Best-effort status garnish. Opens read-only (via the shared stale-schema heal) so
-    /api/status never routinely writes to state.db while another Hermes process uses it."""
+    """Best-effort, bounded status garnish from the small ``sessions`` table only.
+
+    ``list_sessions_rich`` also joins message activity and shapes previews. On multi-GB
+    stores that work can outlive the HTTP timeout; cancelling ``run_in_threadpool`` does
+    not stop its worker, so one desktop reconnect storm used to leave dozens of SQLite
+    scans running after their callers had already returned. Use the persisted session
+    heartbeat instead and enforce the deadline inside SQLite so timed-out workers really
+    stop. The heartbeat can lag a message by about a minute, safely inside this five-minute
+    dashboard window.
+    """
+    import sqlite3
+    from contextlib import closing
+
     from hermes_state import _default_db_path
-    # The heal helper bootstraps a missing store; this garnish must not — on a fresh install
-    # /api/status polls would otherwise create state.db before the user's first session.
-    if not Path(_default_db_path()).exists():
+
+    db_path = Path(_default_db_path())
+    # A status poll must never bootstrap, heal or otherwise write the session store.
+    if not db_path.exists():
         return 0
-    db = _open_session_db_for_profile(None, read_only=True)
+
+    deadline = time.monotonic() + _STATUS_ACTIVE_SESSIONS_QUERY_TIMEOUT
+    interrupted_by_deadline = False
+
+    def _deadline_progress_handler() -> int:
+        nonlocal interrupted_by_deadline
+        if time.monotonic() >= deadline:
+            interrupted_by_deadline = True
+            return 1
+        return 0
+
     try:
-        sessions = db.list_sessions_rich(limit=50, compact_rows=True)
-        now = time.time()
-        return sum(1 for s in sessions if s.get("ended_at") is None
-                   and (now - s.get("last_active", s.get("started_at", 0))) < 300)
-    finally:
-        db.close()
+        uri = db_path.resolve().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=0.1)) as conn:
+            conn.execute("PRAGMA query_only = ON")
+            conn.set_progress_handler(_deadline_progress_handler, 1000)
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM sessions "
+                    "WHERE ended_at IS NULL "
+                    "AND COALESCE(last_activity_at, started_at) >= ?",
+                    (time.time() - 300,),
+                ).fetchone()
+            finally:
+                conn.set_progress_handler(None, 0)
+        return int(row[0] if row else 0)
+    except sqlite3.OperationalError as exc:
+        if interrupted_by_deadline and "interrupt" in str(exc).lower():
+            raise TimeoutError("active-session status query exceeded its deadline") from exc
+        raise
 
 
 async def _status_active_sessions() -> int:
