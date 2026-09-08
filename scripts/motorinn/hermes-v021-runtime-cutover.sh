@@ -166,6 +166,7 @@ restore_previous() {
     fi
     echo "Hermes v0.21 runtime cutover failed; prior launchd definitions were restored." >&2
   )
+  return 1
 }
 trap restore_previous ERR
 
