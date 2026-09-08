@@ -195,6 +195,7 @@ APPLIED=1
 replace_value() {
   local value="$1"
   value="${value//$HOME\/.hermes\/runtimes\/hermes-v2026.8.27-8f0fb6c72b6e/$NEW_RUNTIME}"
+  value="${value//$HOME\/.hermes\/runtimes\/hermes-v2026.8.31-69d5eed4a751/$NEW_RUNTIME}"
   value="${value//$HOME\/.hermes\/hermes-agent\/venv/$NEW_RUNTIME}"
   value="${value//$HOME\/.hermes\/worktrees\/hermes-real-profile-v0206/$NEW_WORKTREE}"
   printf '%s' "$value"
