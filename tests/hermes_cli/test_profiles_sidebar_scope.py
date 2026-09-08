@@ -132,6 +132,27 @@ class TestSidebarScope:
 
 class TestCrossProfileProjectTree:
 
+    def test_session_hydration_is_capped_for_cold_all_profile_loads(
+        self, client, profiles_on_disk, monkeypatch
+    ):
+        for name, home in profiles_on_disk.items():
+            _seed_session(home, f"{name}-chat", source="cli")
+
+        from tui_gateway import server as gateway_server
+
+        seen_limits = []
+
+        def bounded_tree(_db, **kwargs):
+            seen_limits.append(kwargs["session_limit"])
+            return {"projects": [], "scoped_session_ids": []}, None
+
+        monkeypatch.setattr(gateway_server, "_build_project_tree", bounded_tree)
+
+        response = client.get("/api/profiles/projects/tree", params={"session_limit": 5000})
+
+        assert response.status_code == 200
+        assert seen_limits == [500, 500]
+
     def test_one_folder_worked_in_by_two_profiles_is_one_project(self, client, profiles_on_disk, tmp_path):
         # A folder is a folder no matter who opened it. Two profiles working the
         # same checkout is the normal case (that's the point of profiles), so it

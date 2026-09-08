@@ -90,6 +90,12 @@ current_matches() {
 }
 
 desktop_turns_active() {
+  # No live Desktop process means no Desktop turn can still be executing.
+  # This also avoids false deferrals when an old WAL-mode database is readable
+  # as a file but cannot be opened read-only without its missing sidecars.
+  if ! pgrep -x Hermes >/dev/null 2>&1; then
+    return 0
+  fi
   python3 - <<'PY'
 import glob
 import pathlib

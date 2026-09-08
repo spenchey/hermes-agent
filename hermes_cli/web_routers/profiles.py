@@ -246,6 +246,7 @@ _SIDEBAR_CACHE_MAX_ENTRIES = 32
 _SIDEBAR_PROFILE_CACHE_MAX_ENTRIES = 256
 _SIDEBAR_PROFILE_CACHE = OrderedDict()
 _SIDEBAR_PROFILE_CACHE_LOCK = threading.Lock()
+_ALL_PROFILE_SCAN_LOCK = threading.Lock()
 
 
 def _stat_fingerprint(path: Path):
@@ -323,7 +324,14 @@ def _sidebar_singleflight_cache(func):
 
         bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
-        key = tuple(bound.arguments.items())
+        # Tests and multi-home embeddings can rebind the active Hermes home in one
+        # process. Never serve a cached response from the previous store.
+        try:
+            from hermes_cli import profiles as profiles_mod
+            cache_home = str(profiles_mod.get_profile_dir("default"))
+        except Exception:
+            cache_home = ""
+        key = (cache_home, *tuple(bound.arguments.items()))
         cached = _lookup(key)
         if cached is not miss:
             return cached
@@ -355,11 +363,22 @@ def _sidebar_singleflight_cache(func):
     return wrapped
 
 
+def _serialize_all_profile_scan(func):
+    """Do not let separate all-profile endpoints scan the same large stores together."""
+    @functools.wraps(func)
+    def wrapped(*args, **kwargs):
+        with _ALL_PROFILE_SCAN_LOCK:
+            return func(*args, **kwargs)
+    return wrapped
+
+
 def _csv_list(value: Optional[str]) -> List[str]:
     return [s.strip() for s in (value or "").split(",") if s.strip()]
 
 
 @sessions_router.get("/api/profiles/sessions")
+@_sidebar_singleflight_cache
+@_serialize_all_profile_scan
 def get_profiles_sessions(
     # ``le=500`` caps the page size — this endpoint fans out across EVERY profile's state.db.
     # 500 (not 100) because desktop callers use limit=200 and the electron remote-merge
@@ -414,6 +433,7 @@ def get_profiles_sessions(
 
 @sessions_router.get("/api/profiles/sessions/sidebar")
 @_sidebar_singleflight_cache
+@_serialize_all_profile_scan
 def get_profiles_sessions_sidebar(
     recents_profile: str = "all", recents_limit: int = 20, recents_exclude: str = None,
     cron_limit: int = 50, messaging_limit: int = 100, messaging_exclude: str = None):
@@ -557,7 +577,9 @@ def _merge_profile_tree(
 
 
 @sessions_router.get("/api/profiles/projects/tree")
-def get_profiles_projects_tree(preview_limit: int = 3, session_limit: int = 2000):
+@_sidebar_singleflight_cache
+@_serialize_all_profile_scan
+def get_profiles_projects_tree(preview_limit: int = 3, session_limit: int = 500):
     """Project tree for every profile at once, for the all-profiles sidebar.
 
     ``projects.tree`` over JSON-RPC answers for the backend's own profile only; this runs the
@@ -568,11 +590,12 @@ def get_profiles_projects_tree(preview_limit: int = 3, session_limit: int = 2000
     that writes (policy reconciliation), which a read-only fan-out must not do.
     """
     from tui_gateway import server as gateway_server
+    session_limit = min(max(int(session_limit), 1), 500)
     merged: Dict[str, Dict[str, Any]] = {}
     scoped_session_ids: List[str] = []
     errors: List[Dict[str, str]] = []
 
-    for name, home in _profile_targets("GET /api/profiles/projects/tree", lightweight=False):
+    for name, home in _profile_targets("GET /api/profiles/projects/tree", lightweight=True):
         def _read(db, name=name, home=home):
             with _hermes_home_scope(home):
                 tree, _active_id = gateway_server._build_project_tree(

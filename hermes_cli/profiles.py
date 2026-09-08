@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -562,6 +563,10 @@ def _served_by_running_multiplexer(profile_name: str) -> bool:
 # signature changes (skill add/remove) or after a short TTL (deep edits).
 _SKILL_COUNT_CACHE: dict[str, tuple[float, float, int]] = {}
 _SKILL_COUNT_TTL_SECONDS = 30.0
+_SKILL_COUNT_CACHE_LOCK = threading.Lock()
+_LIST_PROFILES_CACHE: dict[str, tuple[tuple, float, List[ProfileInfo]]] = {}
+_LIST_PROFILES_CACHE_TTL_SECONDS = 2.0
+_LIST_PROFILES_CACHE_LOCK = threading.Lock()
 
 
 def _skills_dir_signature(skills_dir: Path) -> float:
@@ -592,12 +597,37 @@ def _count_skills(profile_dir: Path) -> int:
     key = str(skills_dir)
     signature = _skills_dir_signature(skills_dir)
     now = time.time()
-    cached = _SKILL_COUNT_CACHE.get(key)
-    if cached is not None and cached[0] == signature and (now - cached[1]) < _SKILL_COUNT_TTL_SECONDS:
-        return cached[2]
-    count = sum(1 for md in skills_dir.rglob("SKILL.md") if not is_excluded_skill_path(md))
-    _SKILL_COUNT_CACHE[key] = (signature, now, count)
-    return count
+    with _SKILL_COUNT_CACHE_LOCK:
+        # Re-check under the lock: simultaneous Desktop status/profile requests used
+        # to walk the same skill trees independently on a cold backend start.
+        cached = _SKILL_COUNT_CACHE.get(key)
+        if cached is not None and cached[0] == signature and (now - cached[1]) < _SKILL_COUNT_TTL_SECONDS:
+            return cached[2]
+        count = sum(1 for md in skills_dir.rglob("SKILL.md") if not is_excluded_skill_path(md))
+        _SKILL_COUNT_CACHE[key] = (signature, time.time(), count)
+        return count
+
+
+def _profile_listing_signature(default_home: Path, named: List[Path]) -> tuple:
+    """Cheap invalidation key for the metadata read by ``list_profiles``."""
+    signature = []
+    for profile_dir in [default_home, *named]:
+        row = [str(profile_dir)]
+        for path in (
+            profile_dir,
+            profile_dir / "config.yaml",
+            profile_dir / "profile.yaml",
+            profile_dir / "gateway.pid",
+            profile_dir / "gateway_state.json",
+            profile_dir / "skills",
+        ):
+            try:
+                stat_result = path.stat()
+                row.append((stat_result.st_mtime_ns, stat_result.st_size))
+            except OSError:
+                row.append(None)
+        signature.append(tuple(row))
+    return tuple(signature)
 
 
 # profile.yaml — per-profile metadata (description, role, etc.)
@@ -687,17 +717,32 @@ def _profile_info(name: str, path: Path, *, is_default: bool, alias_name: Option
 
 def list_profiles() -> List[ProfileInfo]:
     """Return info for all profiles, including the default."""
-    profiles = []
     default_home = _get_default_hermes_home()
-    if default_home.is_dir():
-        profiles.append(_profile_info("default", default_home, is_default=True))
     named = _iter_named_profile_dirs()
-    if named:
-        alias_map = build_alias_map()  # ONCE, not per profile (was the dominant cost)
-        for entry in named:
-            alias_name = alias_map.get(normalize_profile_name(entry.name))
-            profiles.append(_profile_info(entry.name, entry, is_default=False, alias_name=alias_name))
-    return profiles
+    signature = _profile_listing_signature(default_home, named)
+    cache_key = str(default_home)
+    now = time.monotonic()
+    with _LIST_PROFILES_CACHE_LOCK:
+        cached = _LIST_PROFILES_CACHE.get(cache_key)
+        if cached is not None and cached[0] == signature and now < cached[1]:
+            return list(cached[2])
+
+        # Keep the lock through the cold build. Desktop startup asks for the same
+        # roster through REST and JSON-RPC at once; one build is enough for both.
+        profiles = []
+        if default_home.is_dir():
+            profiles.append(_profile_info("default", default_home, is_default=True))
+        if named:
+            alias_map = build_alias_map()  # ONCE, not per profile (was the dominant cost)
+            for entry in named:
+                alias_name = alias_map.get(normalize_profile_name(entry.name))
+                profiles.append(_profile_info(entry.name, entry, is_default=False, alias_name=alias_name))
+        _LIST_PROFILES_CACHE[cache_key] = (
+            signature,
+            time.monotonic() + _LIST_PROFILES_CACHE_TTL_SECONDS,
+            list(profiles),
+        )
+        return profiles
 
 
 def profiles_to_serve(multiplex: bool, profile_allowlist: Optional[List[str]] = None) -> List[Tuple[str, Path]]:
