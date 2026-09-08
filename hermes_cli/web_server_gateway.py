@@ -221,12 +221,39 @@ def _collect_profile_gateway_topology_cached() -> Dict[str, Any]:
         return data
 
 
-def _load_configured_gateway_platforms() -> set[str]:
+_PLATFORM_CONFIG_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
+_PLATFORM_CONFIG_CACHE_LOCK = threading.Lock()
+_PLATFORM_CONFIG_CACHE_TTL = 10.0
+
+
+def _collect_configured_gateway_platforms() -> set[str]:
     """Connected platform names; synchronous by design — the first ``load_gateway_config()`` does
     platform discovery and can outlast Desktop's WS connect timeout on Windows, so ``get_status``
     runs this in Starlette's worker pool."""
     from gateway.config import load_gateway_config
     return {platform.value for platform in load_gateway_config().get_connected_platforms()}
+
+
+def _load_configured_gateway_platforms() -> set[str]:
+    """Collapse reconnect-storm config reads into one bounded snapshot.
+
+    Desktop can issue many simultaneous status requests after a backend restart. Each raw
+    gateway-config load may resolve mounted secrets and discover plugins; running all of them
+    concurrently exhausts the worker pool and prevents status from completing. Platform names
+    are advisory and configuration changes converge on the next short cache window.
+    """
+    now = time.monotonic()
+    cached = _PLATFORM_CONFIG_CACHE.get("data")
+    if cached is not None and now - _PLATFORM_CONFIG_CACHE["ts"] < _PLATFORM_CONFIG_CACHE_TTL:
+        return cached
+    with _PLATFORM_CONFIG_CACHE_LOCK:
+        now = time.monotonic()
+        cached = _PLATFORM_CONFIG_CACHE.get("data")
+        if cached is not None and now - _PLATFORM_CONFIG_CACHE["ts"] < _PLATFORM_CONFIG_CACHE_TTL:
+            return cached
+        data = _collect_configured_gateway_platforms()
+        _PLATFORM_CONFIG_CACHE.update(data=data, ts=time.monotonic())
+        return data
 
 
 _WINDOWS_11_MIN_BUILD = 22000

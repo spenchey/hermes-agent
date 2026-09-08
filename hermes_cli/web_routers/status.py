@@ -414,7 +414,9 @@ async def get_status(profile: Optional[str] = None):
         # Off-loop: on a cold Windows install the first import of hermes_cli.gateway blocks
         # 15-30s (.pyc compilation + Defender), exceeding the desktop handshake's 15s timeout.
         restart_drain_timeout = await run_in_threadpool(_resolve_restart_drain_timeout)
-        auth = _auth_gate_status()
+        # Provider discovery can perform cold imports. Keep it off the event loop so a
+        # reconnect burst cannot delay the health and WebSocket handshakes behind status.
+        auth = await run_in_threadpool(_auth_gate_status)
 
         status = {
             "version": __version__, "release_date": __release_date__,

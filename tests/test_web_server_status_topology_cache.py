@@ -22,6 +22,11 @@ def _reset_cache():
     _web_server_gateway._TOPOLOGY_CACHE["fn"] = None
 
 
+def _reset_platform_cache():
+    _web_server_gateway._PLATFORM_CONFIG_CACHE["ts"] = 0.0
+    _web_server_gateway._PLATFORM_CONFIG_CACHE["data"] = None
+
+
 def _fake_topology(calls, delay=0.0):
     def _collect():
         if delay:
@@ -116,3 +121,37 @@ def test_topology_cache_misses_when_collector_is_swapped(monkeypatch):
     assert len(calls_a) == 1
     assert len(calls_b) == 1
     assert first is not second
+
+
+def test_platform_config_cache_collapses_concurrent_reads(monkeypatch):
+    """A desktop reconnect burst resolves gateway config only once per cache window."""
+    calls = []
+
+    def collect():
+        time.sleep(0.05)
+        calls.append(1)
+        return {"slack"}
+
+    monkeypatch.setattr(
+        _web_server_gateway, "_collect_configured_gateway_platforms", collect
+    )
+    _reset_platform_cache()
+    results = []
+    try:
+        threads = [
+            threading.Thread(
+                target=lambda: results.append(
+                    _web_server_gateway._load_configured_gateway_platforms()
+                )
+            )
+            for _ in range(12)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    finally:
+        _reset_platform_cache()
+
+    assert len(calls) == 1
+    assert results == [{"slack"}] * 12
