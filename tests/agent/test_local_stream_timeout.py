@@ -22,6 +22,8 @@ class TestLocalStreamReadTimeout:
         "http://0.0.0.0:5000",
         "http://192.168.1.100:8000",
         "http://10.0.0.5:1234",
+        "http://100.67.25.103:8888/v1",
+        "http://spark-a664.tailc83035.ts.net:8888/v1",
         "http://host.docker.internal:11434",
         "http://host.containers.internal:11434",
         "http://host.lima.internal:11434",
@@ -70,6 +72,8 @@ class TestIsLocalEndpoint:
         "http://192.168.1.100:8000",
         "http://10.0.0.5:1234",
         "http://172.17.0.1:11434",
+        "http://100.67.25.103:8888/v1",
+        "http://spark-a664.tailc83035.ts.net:8888/v1",
     ])
     def test_classic_local_addresses(self, url):
         assert is_local_endpoint(url) is True
@@ -84,5 +88,4 @@ class TestIsLocalEndpoint:
     ])
     def test_remote_endpoints(self, url):
         assert is_local_endpoint(url) is False
-
 
