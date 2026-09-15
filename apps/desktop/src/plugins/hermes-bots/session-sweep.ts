@@ -12,7 +12,7 @@ import { host } from '@hermes/plugin-sdk'
 import { PROFILE_SESSION_LIST_LIMIT } from './canonical-chat'
 import { $botMeta, $lastRoster } from './data'
 import { $groupChats } from './group-chat'
-import { groupMemberKey } from './group-membership'
+import { groupMemberKey, groupSessionMemberKey } from './group-membership'
 import { backendTargetProfile, botConnectionRoute, botRosterMeta, requestForBot } from './routing'
 import type { GroupMember, RosterRow } from './types'
 
