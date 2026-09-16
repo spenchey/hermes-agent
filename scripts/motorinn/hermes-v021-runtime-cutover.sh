@@ -209,6 +209,7 @@ replace_value() {
   value="${value//$HOME\/.hermes\/runtimes\/hermes-v2026.9.7-03985d3830/$NEW_RUNTIME}"
   value="${value//$HOME\/.hermes\/hermes-agent\/venv/$NEW_RUNTIME}"
   value="${value//$HOME\/.hermes\/worktrees\/hermes-real-profile-v0206/$NEW_WORKTREE}"
+  value="${value//$HOME\/.hermes\/worktrees\/hermes-v0.21.1-candidate/$NEW_WORKTREE}"
   printf '%s' "$value"
 }
 
