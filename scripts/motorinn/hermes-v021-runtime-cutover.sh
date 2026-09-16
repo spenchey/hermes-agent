@@ -243,7 +243,8 @@ fi
 
 health=""
 for attempt in $(seq 1 18); do
-  if health="$(/usr/bin/curl -fsS --max-time 5 http://127.0.0.1:9119/api/health 2>/dev/null)"; then
+  health="$(/usr/bin/curl -fsS --max-time 5 http://127.0.0.1:9119/api/health 2>/dev/null || true)"
+  if [[ -n "$health" ]]; then
     break
   fi
   sleep 5
