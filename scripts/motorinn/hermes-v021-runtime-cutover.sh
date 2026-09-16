@@ -168,7 +168,16 @@ restore_previous() {
   )
   return 1
 }
-trap restore_previous ERR
+
+cutover_error() {
+  local status="$?" line="${BASH_LINENO[0]:-unknown}" command="${BASH_COMMAND:-unknown}"
+  trap - ERR
+  printf 'Hermes runtime cutover failed at line %s (status %s): %s\n' \
+    "$line" "$status" "$command" >&2
+  restore_previous || true
+  exit "$status"
+}
+trap cutover_error ERR
 
 VERSION="$($NEW_RUNTIME/bin/python -c 'import importlib.metadata as m; print(m.version("hermes-agent"))')"
 if [[ "$VERSION" != "$EXPECTED_VERSION" ]]; then
